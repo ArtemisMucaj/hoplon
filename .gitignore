@@ -1,0 +1,18 @@
+# Supervised service binaries — fetched by scripts/, never committed.
+Hoplon/Resources/panoply
+Hoplon/Resources/guardrail
+Hoplon/Resources/memory-rs
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS
+.DS_Store
