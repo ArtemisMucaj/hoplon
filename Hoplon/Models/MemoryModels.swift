@@ -113,7 +113,6 @@ struct MemoryItem: Codable, Identifiable, RawJSONBacked {
     var body: String? { string("content", "text", "summary", "value", "description") }
     var project: String? { string("project") }
     var score: Double? { raw["score"]?.doubleValue }
-    var updateCount: Int? { int("update_count") }
 }
 
 struct MemoryNode: Codable, Identifiable, RawJSONBacked {
@@ -199,33 +198,6 @@ struct MemoryNode: Codable, Identifiable, RawJSONBacked {
     }
 }
 
-/// One row of `GET /api/sessions` — a session already imported into memory.
-struct MemorySession: Codable, Identifiable, RawJSONBacked {
-    let raw: [String: JSONValue]
-    private let fallbackID = UUID().uuidString
-    init(from decoder: Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        raw = (try? c.decode([String: JSONValue].self)) ?? [:]
-    }
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        try c.encode(raw)
-    }
-    var id: String { string("id", "uuid", "session_id", "name") ?? fallbackID }
-    var source: String? { string("source") }
-    var status: String? { string("status") }
-    var lastError: String? { string("last_error") }
-    var messageCount: Int? { int("message_count") }
-    var itemsWritten: Int? { int("items_written") }
-    /// Unix seconds; the server sends a raw integer.
-    var importedAt: Int? { int("imported_at") }
-
-    var importedDate: Date? { importedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) } }
-    /// Whether the recorded import attempt failed (memory-rs records failures so
-    /// the dream harvest stops retrying them).
-    var didFail: Bool { (status ?? "").lowercased() == "failed" }
-}
-
 // MARK: - Response envelopes
 //
 // memory-rs returns bare `{"<key>": [...]}` objects with no count field.
@@ -236,7 +208,6 @@ struct MemorySearchResponse: Codable {
     /// Set when a namespace scope matched no member projects.
     var note: String?
 }
-struct MemorySessionsResponse: Codable { var sessions: [MemorySession] }
 struct MemoryTreeResponse: Codable { var nodes: [MemoryNode] }
 
 /// `GET /api/memory/{id}` — a tagged union over node / item / ambiguous.
@@ -255,7 +226,6 @@ struct MemoryStats: Codable, Equatable {
     var totalNodes: Int
     /// `[(kind, count)]` — the server sends an array of 2-element arrays.
     var itemsByKind: [(String, Int)]
-    var nodesByKind: [(String, Int)]
     var dataDir: String?
 
     enum CodingKeys: String, CodingKey {
@@ -263,7 +233,6 @@ struct MemoryStats: Codable, Equatable {
         case totalSessions = "total_sessions"
         case totalNodes = "total_nodes"
         case itemsByKind = "items_by_kind"
-        case nodesByKind = "nodes_by_kind"
         case dataDir = "data_dir"
     }
 
@@ -274,7 +243,6 @@ struct MemoryStats: Codable, Equatable {
         totalNodes    = (try? c.decode(Int.self, forKey: .totalNodes)) ?? 0
         dataDir       = try? c.decode(String.self, forKey: .dataDir)
         itemsByKind   = Self.decodePairs(c, .itemsByKind)
-        nodesByKind   = Self.decodePairs(c, .nodesByKind)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -299,7 +267,6 @@ struct MemoryStats: Codable, Equatable {
             && lhs.totalSessions == rhs.totalSessions
             && lhs.totalNodes == rhs.totalNodes
             && lhs.itemsByKind.elementsEqual(rhs.itemsByKind, by: ==)
-            && lhs.nodesByKind.elementsEqual(rhs.nodesByKind, by: ==)
     }
 }
 
@@ -336,48 +303,6 @@ struct MemoryNamespacesResponse: Codable { var namespaces: [MemoryNamespace] }
 struct MemoryNamespaceDetail: Codable, Equatable {
     var name: String
     var projects: [String]
-}
-
-// MARK: - Commands
-
-struct MemoryImportRequest: Codable {
-    var path: String
-    var force: Bool
-}
-
-struct MemoryImportResponse: Codable, Equatable {
-    var imported: Bool
-    var alreadyImported: Bool?
-    var sessionId: String?
-    var messageCount: Int?
-    var operationsApplied: Int?
-    var operationsSkipped: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case imported
-        case alreadyImported = "already_imported"
-        case sessionId = "session_id"
-        case messageCount = "message_count"
-        case operationsApplied = "operations_applied"
-        case operationsSkipped = "operations_skipped"
-    }
-}
-
-struct MemoryAddResourceRequest: Codable {
-    var source: String
-    var name: String?
-}
-
-struct MemoryAddResourceResponse: Codable, Equatable {
-    var uri: String
-    var source: String
-    var chars: Int
-    var abstract: String?
-
-    enum CodingKeys: String, CodingKey {
-        case uri, source, chars
-        case abstract
-    }
 }
 
 // MARK: - LLM endpoints (memory-rs's own config, separate from codesearch's)

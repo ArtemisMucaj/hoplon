@@ -137,13 +137,6 @@ struct MemoryClient {
         try await show(uri).node
     }
 
-    /// `DELETE /api/memory/{id}` — delete an item by id or unique `kind/name`.
-    private struct DeleteResponse: Decodable { let deleted: Bool; let reason: String? }
-    @discardableResult
-    func deleteItem(_ id: String) async throws -> Bool {
-        try await delete("/api/memory/\(encodeSegment(id))", type: DeleteResponse.self).deleted
-    }
-
     // MARK: - Virtual filesystem
 
     /// `GET /api/tree` — a directory's children; the roots when `uri` is nil.
@@ -151,23 +144,6 @@ struct MemoryClient {
         var query: [URLQueryItem] = []
         if let uri { query.append(URLQueryItem(name: "uri", value: uri)) }
         return try await get("/api/tree", query: query, type: MemoryTreeResponse.self, timeout: 30).nodes
-    }
-
-    // MARK: - Sessions
-
-    /// `GET /api/sessions` — sessions already imported (including failed
-    /// attempts, which memory-rs records so the dream harvest stops retrying).
-    func sessions() async throws -> [MemorySession] {
-        try await get("/api/sessions", type: MemorySessionsResponse.self, timeout: 20).sessions
-    }
-
-    /// `POST /api/import` — import one transcript file by path. Extraction calls
-    /// the configured LLM, so this is slow; the timeout is generous.
-    func importSessionFile(path: String, force: Bool = false) async throws -> MemoryImportResponse {
-        try await post("/api/import",
-                       body: MemoryImportRequest(path: path, force: force),
-                       type: MemoryImportResponse.self,
-                       timeout: 600)
     }
 
     // MARK: - Session discovery + background import
@@ -220,9 +196,10 @@ struct MemoryClient {
         try await post("/api/namespaces", body: ["name": name], type: CreatedResponse.self, timeout: 15).created
     }
 
+    private struct DeletedResponse: Decodable { let deleted: Bool }
     @discardableResult
     func deleteNamespace(_ name: String) async throws -> Bool {
-        try await delete("/api/namespaces/\(encodeSegment(name))", type: DeleteResponse.self).deleted
+        try await delete("/api/namespaces/\(encodeSegment(name))", type: DeletedResponse.self).deleted
     }
 
     private struct AssignedResponse: Decodable { let assigned: Bool }
@@ -239,17 +216,6 @@ struct MemoryClient {
     func unassignProject(_ project: String, from namespace: String) async throws -> Bool {
         try await delete("/api/namespaces/\(encodeSegment(namespace))/projects/\(encodeSegment(project))",
                          type: RemovedResponse.self).removed
-    }
-
-    // MARK: - Commands
-
-    /// `POST /api/resources` — fetch a file or URL, summarize it, store it at
-    /// `memory://resources/<name>`. Calls the LLM for the summary.
-    func addResource(source: String, name: String? = nil) async throws -> MemoryAddResourceResponse {
-        try await post("/api/resources",
-                       body: MemoryAddResourceRequest(source: source, name: name),
-                       type: MemoryAddResourceResponse.self,
-                       timeout: 300)
     }
 
     // MARK: - LLM endpoints
