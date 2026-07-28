@@ -317,6 +317,25 @@ struct MemoryClient {
         return list.data.map(\.id)
     }
 
+    // MARK: - LLM usages
+
+    /// `GET /api/llm/usages` — every LLM job this service runs.
+    func llmUsages() async throws -> [LlmUsage] {
+        try await get("/api/llm/usages", type: LlmUsagesResponse.self, timeout: 15).usages
+    }
+
+    /// `PUT /api/llm/usages/{id}` — bind one usage. Both nil clears it.
+    @discardableResult
+    func setLlmUsage(_ id: String, endpoint: String?, model: String?) async throws -> LlmUsage {
+        var req = URLRequest(url: try url("/api/llm/usages/\(encodeSegment(id))"))
+        req.httpMethod = "PUT"
+        req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(LlmUsageBinding(endpoint: endpoint, model: model))
+        let (data, response) = try await session.data(for: req)
+        return try decode(LlmUsage.self, from: data, response: response)
+    }
+
     // MARK: - Copilot device-flow login
 
     /// `POST /api/llm/copilot/login` — start (or restart) the GitHub device

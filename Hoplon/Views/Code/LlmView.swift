@@ -42,6 +42,11 @@ struct LlmView: View {
     @State private var isStartingLogin = false
     @State private var loginPollTask: Task<Void, Never>?
 
+    /// Per-usage bindings — the first section, and the reason most people open
+    /// this screen.
+    @State private var usages: [LlmUsage] = []
+    @State private var isSavingUsage = false
+
     private var manager: CodesearchManager { state.codesearchManager }
 
     /// Whether an OpenAI endpoint is the live backend. An endpoint marked
@@ -65,6 +70,7 @@ struct LlmView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                usagesSection
                 openaiSection
                 copilotSection
             }
@@ -77,6 +83,7 @@ struct LlmView: View {
                     loadEndpoints(reloadModels: true)
                     loadCopilotModels()
                     loadTarget()
+                    loadUsages()
                 } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(isLoadingEndpoints)
             }
@@ -97,10 +104,72 @@ struct LlmView: View {
             if endpoints == nil { loadEndpoints(reloadModels: true) }
             if !copilotModels.loaded { loadCopilotModels() }
             if activeTarget == nil { loadTarget() }
+            if usages.isEmpty { loadUsages() }
         }
         .onDisappear {
             endpointsTask?.cancel(); isLoadingEndpoints = false
             loginPollTask?.cancel()
+        }
+    }
+
+    // MARK: - Usages
+
+    @ViewBuilder
+    private var usagesSection: some View {
+        LlmUsagesSection(
+            usages: usages,
+            choices: chatChoices,
+            // codesearch has no embedding usage; the parameter is satisfied for
+            // the shared component's sake.
+            embeddingChoices: chatChoices,
+            isBusy: isSavingUsage
+        ) { usage, choice in
+            Task { await bindUsage(usage, to: choice) }
+        }
+    }
+
+    /// Every (provider, model) pair that can answer a job: each registered
+    /// endpoint crossed with its discovered models, plus Copilot when signed in.
+    private var chatChoices: [LlmChoice] {
+        var out: [LlmChoice] = []
+        for endpoint in endpoints?.sortedEndpoints ?? [] {
+            let models = endpointModels[endpoint.name]?.models.map(\.id) ?? []
+            if models.isEmpty {
+                // Not probed yet (or unreachable) — still offer the endpoint so
+                // its configured model can be selected.
+                out.append(LlmChoice(endpoint: endpoint.name, model: endpoint.model))
+            } else {
+                out.append(contentsOf: models.map { LlmChoice(endpoint: endpoint.name, model: $0) })
+            }
+        }
+        if !copilotNeedsAuth {
+            let models = copilotModels.models.map(\.id)
+            out.append(contentsOf: models.isEmpty
+                       ? [LlmChoice(endpoint: "copilot", model: activeTarget?.copilotModel)]
+                       : models.map { LlmChoice(endpoint: "copilot", model: $0) })
+        }
+        return out
+    }
+
+    private func loadUsages() {
+        Task {
+            if let list = try? await manager.makeClient().llmUsages() { usages = list }
+        }
+    }
+
+    /// Persist one usage's binding. `nil` clears it back to inherit.
+    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice?) async {
+        isSavingUsage = true
+        defer { isSavingUsage = false }
+        do {
+            let updated = try await manager.makeClient().setLlmUsage(
+                usage.id, endpoint: choice?.endpoint, model: choice?.model
+            )
+            if let idx = usages.firstIndex(where: { $0.id == updated.id }) {
+                usages[idx] = updated
+            }
+        } catch {
+            endpointsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -180,11 +249,6 @@ struct LlmView: View {
                         }
                     }
                     Spacer()
-                    if !isActive {
-                        Button("Set Active") { Task { await activate(endpoint.name) } }
-                            .controlSize(.small)
-                            .help("Use this endpoint — switches the backend to OpenAI")
-                    }
                     if list.isLoading {
                         ProgressView().controlSize(.small)
                     } else {
@@ -197,13 +261,15 @@ struct LlmView: View {
                 .padding(12)
                 Divider()
                 // Models
-                modelList(list, endpoint: endpoint, endpointIsActive: isActive)
+                modelList(list)
             }
         }
     }
 
+    /// The models a provider offers. A plain list: picking one happens in the
+    /// usages section above, so there is no selection state here.
     @ViewBuilder
-    private func modelList(_ list: ModelList, endpoint: LlmEndpoint, endpointIsActive: Bool) -> some View {
+    private func modelList(_ list: ModelList) -> some View {
         if let error = list.error {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
@@ -216,26 +282,15 @@ struct LlmView: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(list.models) { model in
-                    // Only the live-active OpenAI endpoint shows a selected model;
-                    // otherwise the radios read as unselected (Copilot is active,
-                    // or this isn't the chosen endpoint).
-                    let isSelected = endpointIsActive && endpoint.model == model.id
-                    Button {
-                        Task { await selectModel(model.id, for: endpoint) }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                            Text(model.label).font(.callout)
-                            Spacer()
-                            if settingModel == "\(endpoint.name)/\(model.id)" {
-                                ProgressView().controlSize(.small)
-                            }
+                    HStack(spacing: 8) {
+                        Text(model.label).font(.callout)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        if model.name != nil {
+                            Text(model.id).font(.caption.monospaced()).foregroundStyle(.tertiary)
                         }
-                        .contentShape(Rectangle())
-                        .padding(.horizontal, 12).padding(.vertical, 6)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
                     if model.id != list.models.last?.id { Divider() }
                 }
             }
@@ -275,30 +330,16 @@ struct LlmView: View {
                 CardContainer {
                     VStack(spacing: 0) {
                         ForEach(copilotModels.models) { model in
-                            // Selected when Copilot is the active backend AND this
-                            // is the pinned model (or, if none is pinned, the row
-                            // is just selectable — tapping pins it and activates).
-                            let isSelected = activeTarget?.target == .copilot
-                                && activeTarget?.copilotModel == model.id
-                            Button {
-                                Task { await selectCopilotModel(model.id) }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                                    Text(model.label).font(.callout)
-                                    Spacer()
-                                    if settingCopilotModel == model.id {
-                                        ProgressView().controlSize(.small)
-                                    } else if model.name != nil {
-                                        Text(model.id).font(.caption.monospaced())
-                                            .foregroundStyle(.secondary).textSelection(.enabled)
-                                    }
+                            HStack(spacing: 8) {
+                                Text(model.label).font(.callout)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                if model.name != nil {
+                                    Text(model.id).font(.caption.monospaced())
+                                        .foregroundStyle(.tertiary).textSelection(.enabled)
                                 }
-                                .contentShape(Rectangle())
-                                .padding(.horizontal, 12).padding(.vertical, 6)
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12).padding(.vertical, 5)
                             if model.id != copilotModels.models.last?.id { Divider() }
                         }
                     }

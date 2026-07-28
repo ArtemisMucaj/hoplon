@@ -622,3 +622,62 @@ nonisolated struct DreamConfigResponse: Codable, Equatable {
         autoImport         = c.lenient(Bool.self, .autoImport, or: true)
     }
 }
+
+// MARK: - LLM usages
+
+/// One LLM job a service runs, and which endpoint + model answers it.
+///
+/// Both services expose the same shape (`GET /api/llm/usages`), so one DTO and
+/// one section view drive both settings panes.
+nonisolated struct LlmUsage: Codable, Equatable, Identifiable {
+    var id: String
+    var label: String
+    var usageDescription: String
+    /// `chat` or `embedding` — an embedding usage only accepts an
+    /// embedding-capable model, and Copilot can't serve it.
+    var kind: String
+    var endpoint: String?
+    var model: String?
+    /// Whether this follows the shared/active backend rather than naming its
+    /// own. Shown so the user knows a role change will move it too.
+    var inherited: Bool
+    /// Set when the binding only applies after the service restarts (codesearch
+    /// pins its query expander at boot).
+    var requiresRestart: Bool
+
+    var isEmbedding: Bool { kind == "embedding" }
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, kind, endpoint, model, inherited
+        case usageDescription = "description"
+        case requiresRestart = "requires_restart"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id               = c.lenient(String.self, .id, or: "")
+        label            = c.lenient(String.self, .label, or: "")
+        usageDescription = c.lenient(String.self, .usageDescription, or: "")
+        kind             = c.lenient(String.self, .kind, or: "chat")
+        endpoint         = try? c.decode(String.self, forKey: .endpoint)
+        model            = try? c.decode(String.self, forKey: .model)
+        inherited        = c.lenient(Bool.self, .inherited, or: true)
+        requiresRestart  = c.lenient(Bool.self, .requiresRestart, or: false)
+    }
+}
+
+nonisolated struct LlmUsagesResponse: Codable { var usages: [LlmUsage] }
+
+/// Body for `PUT /api/llm/usages/{id}`. Both nil clears the override.
+nonisolated struct LlmUsageBinding: Codable {
+    var endpoint: String?
+    var model: String?
+}
+
+/// One selectable (provider, model) pair for a usage dropdown.
+nonisolated struct LlmChoice: Identifiable, Hashable {
+    let endpoint: String
+    let model: String?
+    var id: String { "\(endpoint)/\(model ?? "-")" }
+    var label: String { model.map { "\(endpoint) · \($0)" } ?? endpoint }
+}

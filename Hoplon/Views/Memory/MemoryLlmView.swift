@@ -29,12 +29,6 @@ struct MemoryLlmView: View {
         var loaded = false
     }
 
-    /// Which slot a tapped model fills, per endpoint. Chat by default.
-    @State private var modelSlot: [String: LlmRole] = [:]
-    /// Set while writing a model choice, so that row shows a spinner.
-    @State private var settingModel: String?
-    /// Set while binding a role, so that button shows a spinner.
-    @State private var settingRole: String?
 
     @State private var editingEndpoint: MemoryLlmEndpoint?
     @State private var showAddSheet = false
@@ -43,15 +37,19 @@ struct MemoryLlmView: View {
     @State private var copilotModels = ModelList()
     @State private var copilotLogin: CopilotLoginStatus?
     @State private var isStartingLogin = false
-    @State private var settingCopilotModel: String?
     @State private var loginPollTask: Task<Void, Never>?
+
+    /// Per-usage bindings — the first section, and the reason most people open
+    /// this screen.
+    @State private var usages: [LlmUsage] = []
+    @State private var isSavingUsage = false
 
     private var manager: MemoryManager { state.memoryManager }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                rolesSection
+                usagesSection
                 endpointsSection
                 copilotSection
                 if let pinned = config?.pinnedEmbedding { pinnedSection(pinned) }
@@ -64,6 +62,7 @@ struct MemoryLlmView: View {
                 Button {
                     load(reloadModels: true)
                     loadCopilotModels()
+                    loadUsages()
                 } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .disabled(isLoadingConfig)
             }
@@ -83,94 +82,53 @@ struct MemoryLlmView: View {
         .onAppear {
             if config == nil { load(reloadModels: true) }
             if !copilotModels.loaded { loadCopilotModels() }
+            if usages.isEmpty { loadUsages() }
         }
         .onDisappear { loginPollTask?.cancel() }
     }
 
-    // MARK: - Active roles
-
-    /// What actually answers each kind of request, up front.
-    ///
-    /// Chat and embeddings resolve independently and it matters: Copilot serves
-    /// chat but has no embeddings endpoint, and memory-rs has no in-process
-    /// embedding backend — so a store whose embedding role points nowhere
-    /// reachable can't recall anything. Showing both bindings (and what they
-    /// fall back to) makes that visible instead of hiding it in a per-card menu.
-    @ViewBuilder
-    private var rolesSection: some View {
-        if let config {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionHeader("Active endpoints")
-                CardContainer {
-                    VStack(spacing: 0) {
-                        roleRow(.chat, config: config)
-                        Divider()
-                        roleRow(.embedding, config: config)
-                        Divider()
-                        roleRow(.shared, config: config)
-                    }
-                }
-            }
-        }
-    }
+    // MARK: - Usages
 
     @ViewBuilder
-    private func roleRow(_ role: LlmRole, config: MemoryLlmConfig) -> some View {
-        let resolved = config.resolved(role)
-        let explicit = config.isExplicit(role)
-        let model = resolvedModel(role, config: config)
-
-        HStack(spacing: 10) {
-            Image(systemName: roleIcon(role))
-                .foregroundStyle(resolved == nil ? Color.secondary : Color.accentColor)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(role.label).font(.callout.weight(.medium))
-                Text(role.help).font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 1) {
-                if let resolved {
-                    HStack(spacing: 5) {
-                        Text(resolved).font(.callout)
-                            .lineLimit(1).truncationMode(.middle)
-                        // An inherited binding is shown but marked, so it can't
-                        // be mistaken for a deliberate per-role choice.
-                        if !explicit, role != .shared {
-                            Badge(text: "inherited", color: .secondary)
-                        }
-                    }
-                    if let model {
-                        Text(model).font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
-                } else {
-                    Text(role == .shared ? "none" : "OPENAI_* environment")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: 240, alignment: .trailing)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-    }
-
-    private func roleIcon(_ role: LlmRole) -> String {
-        switch role {
-        case .shared:    return "circle.dashed"
-        case .chat:      return "text.bubble"
-        case .embedding: return "point.3.filled.connected.trianglepath.dotted"
+    private var usagesSection: some View {
+        LlmUsagesSection(
+            usages: usages,
+            choices: chatChoices,
+            embeddingChoices: embeddingChoices,
+            isBusy: isSavingUsage
+        ) { usage, choice in
+            Task { await bindUsage(usage, to: choice) }
         }
     }
 
-    /// The model a role will actually use, following the same resolution the
-    /// server does (role override → shared default → that endpoint's model).
-    private func resolvedModel(_ role: LlmRole, config: MemoryLlmConfig) -> String? {
-        guard let name = config.resolved(role) else { return nil }
-        if name == MemoryLlmConfig.copilotEndpointName {
-            return config.copilot?.model ?? "Copilot default"
+    /// Every (provider, model) pair that can answer a chat job: each registered
+    /// endpoint crossed with the models it reports, plus Copilot when signed in.
+    private var chatChoices: [LlmChoice] {
+        var out: [LlmChoice] = []
+        for endpoint in config?.endpoints ?? [] {
+            let models = endpointModels[endpoint.name]?.models.map(\.id) ?? []
+            if models.isEmpty {
+                // Not probed yet (or unreachable) — still offer the endpoint so
+                // its configured model can be selected.
+                out.append(LlmChoice(endpoint: endpoint.name, model: endpoint.model))
+            } else {
+                out.append(contentsOf: models.map { LlmChoice(endpoint: endpoint.name, model: $0) })
+            }
         }
-        guard let endpoint = config.endpoints.first(where: { $0.name == name }) else { return nil }
-        return role == .embedding ? endpoint.embeddingModel : endpoint.model
+        if config?.copilot?.authenticated == true {
+            let models = copilotModels.models.map(\.id)
+            let name = MemoryLlmConfig.copilotEndpointName
+            out.append(contentsOf: models.isEmpty
+                       ? [LlmChoice(endpoint: name, model: config?.copilot?.model)]
+                       : models.map { LlmChoice(endpoint: name, model: $0) })
+        }
+        return out
+    }
+
+    /// Chat choices minus Copilot: it has no embeddings endpoint, and memory has
+    /// no in-process embedder to fall back on.
+    private var embeddingChoices: [LlmChoice] {
+        chatChoices.filter { $0.endpoint != MemoryLlmConfig.copilotEndpointName }
     }
 
     // MARK: - Endpoints
@@ -205,29 +163,27 @@ struct MemoryLlmView: View {
         }
     }
 
-    /// One endpoint as a card: header (name + role badges + bind/edit) and its
-    /// model list, where tapping a model fills the selected slot.
+    /// One endpoint as a card: what it is, and the models it offers.
+    ///
+    /// Read-only by design — selection moved to the usages section above, so
+    /// this answers "which servers do I have and what do they run" without
+    /// competing for the same decision.
     @ViewBuilder
     private func endpointCard(_ endpoint: MemoryLlmEndpoint, config: MemoryLlmConfig) -> some View {
         let list = endpointModels[endpoint.name] ?? ModelList()
-        let slot = modelSlot[endpoint.name] ?? .chat
-        let boundRoles = LlmRole.allCases.filter {
-            config.isExplicit($0) && config.resolved($0) == endpoint.name
-        }
-        let isActive = !boundRoles.isEmpty
+        // "In use" means some usage resolves here, which is what the badge is
+        // for — the roles themselves are no longer edited on this screen.
+        let usedBy = usages.filter { $0.endpoint == endpoint.name }
 
         CardContainer {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isActive ? Color.green : Color.secondary)
+                    Image(systemName: usedBy.isEmpty ? "circle" : "checkmark.circle.fill")
+                        .foregroundStyle(usedBy.isEmpty ? Color.secondary : Color.green)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Text(endpoint.name).fontWeight(.medium)
                                 .lineLimit(1).truncationMode(.tail)
-                            ForEach(boundRoles) { role in
-                                Badge(text: role.label, color: .green)
-                            }
                             if endpoint.hasApiKey {
                                 Image(systemName: "key.fill").font(.caption2).foregroundStyle(.secondary)
                             }
@@ -235,19 +191,17 @@ struct MemoryLlmView: View {
                         Text(endpoint.baseUrl)
                             .font(.caption.monospaced()).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
-                        // One line each: model ids are long, and side by side
-                        // they wrap character-by-character in a narrow sheet.
-                        modelLabel("Chat", endpoint.model)
-                        modelLabel("Embed", endpoint.embeddingModel)
+                        if !usedBy.isEmpty {
+                            Text("used by \(usedBy.map(\.label).joined(separator: ", "))")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
-                    // The text column is the flexible part — it truncates first,
-                    // so the trailing controls keep their intrinsic size instead
-                    // of squeezing the name onto two lines.
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .layoutPriority(1)
 
                     HStack(spacing: 6) {
-                        roleMenu(endpoint, config: config)
                         if list.isLoading {
                             ProgressView().controlSize(.small)
                         } else {
@@ -266,81 +220,15 @@ struct MemoryLlmView: View {
                 }
                 .padding(12)
                 Divider()
-
-                // Which slot a tapped model fills. Memory has two; codesearch
-                // has one, which is why that screen has no such switch.
-                HStack(spacing: 8) {
-                    Text("Set model for").font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: Binding(
-                        get: { slot },
-                        set: { modelSlot[endpoint.name] = $0 }
-                    )) {
-                        Text("Chat").tag(LlmRole.chat)
-                        Text("Embeddings").tag(LlmRole.embedding)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 200)
-                    Spacer()
-                }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                Divider()
-
-                modelList(list, endpoint: endpoint, slot: slot)
+                modelList(list)
             }
         }
     }
 
-    /// One "Chat: <model>" line. Fixed-width label so the two lines align, and
-    /// the value truncates in the middle — model ids differ at both ends.
+    /// The models a provider offers. A plain list: picking one happens in the
+    /// usages section above, so there is no selection state here.
     @ViewBuilder
-    private func modelLabel(_ label: String, _ value: String?) -> some View {
-        HStack(spacing: 4) {
-            Text("\(label):")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .frame(width: 38, alignment: .leading)
-            if let value, !value.isEmpty {
-                Text(value)
-                    .font(.caption2.monospaced()).foregroundStyle(.primary)
-                    .lineLimit(1).truncationMode(.middle)
-            } else {
-                Text("server default")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    /// Bind this endpoint to a role. A menu rather than one button per role:
-    /// three labelled buttons in the header squeeze the name and URL onto extra
-    /// lines in a sheet this narrow.
-    @ViewBuilder
-    private func roleMenu(_ endpoint: MemoryLlmEndpoint, config: MemoryLlmConfig) -> some View {
-        if settingRole?.hasPrefix("\(endpoint.name)/") == true {
-            ProgressView().controlSize(.small)
-        } else {
-            Menu {
-                ForEach(LlmRole.allCases) { role in
-                    let bound = config.isExplicit(role) && config.resolved(role) == endpoint.name
-                    Button {
-                        Task { await bind(role: role, name: bound ? nil : endpoint.name, on: endpoint) }
-                    } label: {
-                        // A tick marks what's already bound, and re-picking it
-                        // unbinds — otherwise there's no way back to "inherit".
-                        Label(role.label, systemImage: bound ? "checkmark" : "")
-                    }
-                }
-            } label: {
-                Label("Use for", systemImage: "arrow.triangle.branch")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Bind this endpoint to chat, embeddings, or as the shared default")
-        }
-    }
-
-    @ViewBuilder
-    private func modelList(_ list: ModelList, endpoint: MemoryLlmEndpoint, slot: LlmRole) -> some View {
+    private func modelList(_ list: ModelList) -> some View {
         if let error = list.error {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange)
@@ -353,26 +241,15 @@ struct MemoryLlmView: View {
         } else {
             VStack(spacing: 0) {
                 ForEach(list.models) { model in
-                    let current = slot == .embedding ? endpoint.embeddingModel : endpoint.model
-                    let isSelected = current == model.id
-                    Button {
-                        Task { await selectModel(model.id, for: endpoint, slot: slot) }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                            Text(model.id).font(.callout)
-                            Spacer()
-                            if settingModel == "\(endpoint.name)/\(slot.rawValue)/\(model.id)" {
-                                ProgressView().controlSize(.small)
-                            } else if let vendor = model.vendor {
-                                Text(vendor).font(.caption).foregroundStyle(.tertiary)
-                            }
+                    HStack(spacing: 8) {
+                        Text(model.id).font(.callout)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        if let vendor = model.vendor {
+                            Text(vendor).font(.caption).foregroundStyle(.tertiary)
                         }
-                        .contentShape(Rectangle())
-                        .padding(.horizontal, 12).padding(.vertical, 6)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
                     if model.id != list.models.last?.id { Divider() }
                 }
             }
@@ -423,25 +300,15 @@ struct MemoryLlmView: View {
                 CardContainer {
                     VStack(spacing: 0) {
                         ForEach(copilotModels.models) { model in
-                            let isSelected = isActive && config?.copilot?.model == model.id
-                            Button {
-                                Task { await selectCopilotModel(model.id) }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
-                                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                                    Text(model.id).font(.callout)
-                                    Spacer()
-                                    if settingCopilotModel == model.id {
-                                        ProgressView().controlSize(.small)
-                                    } else if let vendor = model.vendor {
-                                        Text(vendor).font(.caption).foregroundStyle(.tertiary)
-                                    }
+                            HStack(spacing: 8) {
+                                Text(model.id).font(.callout)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                if let vendor = model.vendor {
+                                    Text(vendor).font(.caption).foregroundStyle(.tertiary)
                                 }
-                                .contentShape(Rectangle())
-                                .padding(.horizontal, 12).padding(.vertical, 6)
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12).padding(.vertical, 5)
                             if model.id != copilotModels.models.last?.id { Divider() }
                         }
                     }
@@ -532,6 +399,32 @@ struct MemoryLlmView: View {
 
     // MARK: - Loading
 
+    /// Load the usage bindings — the first section's data.
+    private func loadUsages() {
+        Task {
+            if let list = try? await manager.makeClient().llmUsages() { usages = list }
+        }
+    }
+
+    /// Persist one usage's binding. `nil` clears it back to inherit.
+    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice?) async {
+        isSavingUsage = true
+        defer { isSavingUsage = false }
+        do {
+            let updated = try await manager.makeClient().setLlmUsage(
+                usage.id, endpoint: choice?.endpoint, model: choice?.model
+            )
+            if let idx = usages.firstIndex(where: { $0.id == updated.id }) {
+                usages[idx] = updated
+            }
+            // The endpoint cards show which usages point at them, so refresh
+            // the config too.
+            load(reloadModels: false)
+        } catch {
+            configError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     private func load(reloadModels: Bool) {
         isLoadingConfig = true
         configError = nil
@@ -618,6 +511,7 @@ struct MemoryLlmView: View {
                 case .authorized:
                     load(reloadModels: false)
                     loadCopilotModels()
+                    loadUsages()
                     return
                 case .failed, .idle:
                     return
@@ -628,57 +522,7 @@ struct MemoryLlmView: View {
         }
     }
 
-    /// Pin a Copilot model and switch chat to Copilot, mirroring how selecting
-    /// an OpenAI model activates its endpoint.
-    private func selectCopilotModel(_ model: String) async {
-        settingCopilotModel = model
-        defer { settingCopilotModel = nil }
-        do {
-            let client = manager.makeClient()
-            try await client.setCopilotModel(model)
-            config = try await client.setLlmActive(
-                name: MemoryLlmConfig.copilotEndpointName, role: .chat
-            )
-        } catch {
-            configError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
     // MARK: - Actions
-
-    /// Bind (or, with `name: nil`, clear) a role. `on` is the endpoint whose
-    /// row shows the spinner — with `nil` there's no name to key it by.
-    private func bind(role: LlmRole, name: String?, on endpoint: MemoryLlmEndpoint) async {
-        settingRole = "\(endpoint.name)/\(role.rawValue)"
-        defer { settingRole = nil }
-        do {
-            config = try await manager.makeClient().setLlmActive(name: name, role: role)
-        } catch {
-            configError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
-
-    private func selectModel(_ model: String, for endpoint: MemoryLlmEndpoint, slot: LlmRole) async {
-        settingModel = "\(endpoint.name)/\(slot.rawValue)/\(model)"
-        defer { settingModel = nil }
-        do {
-            // Send only the slot being changed; the server keeps the other and
-            // the stored key (omitting `api_key` leaves it untouched).
-            let request = MemoryLlmUpsertRequest(
-                baseUrl: endpoint.baseUrl,
-                model: slot == .chat ? model : endpoint.model,
-                embeddingModel: slot == .embedding ? model : endpoint.embeddingModel,
-                apiKey: nil,
-                // Picking a model is also a statement of intent to use this
-                // endpoint for that role, matching the codesearch screen where
-                // selecting a model activates its endpoint.
-                setActive: slot
-            )
-            config = try await manager.makeClient().upsertLlmEndpoint(name: endpoint.name, request)
-        } catch {
-            configError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
-    }
 
     private func save(name: String, request: MemoryLlmUpsertRequest) async -> Bool {
         do {
