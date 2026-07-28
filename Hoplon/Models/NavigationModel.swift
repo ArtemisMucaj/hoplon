@@ -15,8 +15,8 @@ enum MemoryTab: String, Hashable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .browse:   return "Browse"
-        case .sessions: return "Import"
+        case .browse:   return "Memory"
+        case .sessions: return "Sessions"
         }
     }
 
@@ -29,9 +29,10 @@ enum MemoryTab: String, Hashable, CaseIterable, Identifiable {
 }
 
 /// Sidebar selection: a top-level section, an MCP server nested under the
-/// running Proxy, or a Memory sub-tab / namespace. Modeling them in one
-/// `Hashable` type lets the single always-on sidebar `List` bind its selection
-/// directly, so clicking a nested row both selects it and opens its detail.
+/// running Proxy, a Memory sub-tab / namespace, or an indexed codesearch
+/// namespace. Modeling them in one `Hashable` type lets the single always-on
+/// sidebar `List` bind its selection directly, so clicking a nested row both
+/// selects it and opens its detail.
 enum SidebarItem: Hashable {
     case section(AppSection)
     case proxyServer(String)
@@ -39,12 +40,15 @@ enum SidebarItem: Hashable {
     /// A namespace nested under Memory — opens that namespace's detail (its
     /// member projects and the memories scoped to them).
     case memoryNamespace(String)
+    /// An indexed namespace nested under Code Intelligence — opens its
+    /// community graph.
+    case codeNamespace(String)
 }
 
 /// Navigation state for the two-column split: the always-on sidebar picks the
-/// section (or a nested proxy server / memory sub-tab); the detail column fills
-/// the rest. Per-section selection lives here so returning to a section
-/// restores what was open.
+/// section (or a nested proxy server / memory sub-tab / namespace); the detail
+/// column fills the rest. Per-section selection lives here so returning to a
+/// section restores what was open.
 @Observable
 final class NavigationModel {
     /// The section shown in the detail column. Proxy is the landing section.
@@ -53,11 +57,16 @@ final class NavigationModel {
     /// The active Memory sub-tab, or `nil` for the section's landing overview
     /// (stats + namespaces).
     var selectedMemoryTab: MemoryTab?
-    /// A namespace drilled into from the Memory landing, or `nil` for the
+    /// A memory namespace drilled into from the Memory landing, or `nil` for the
     /// namespace grid. Held here (not view `@State`) so the 5s status poll
     /// re-rendering the detail column can't drop it — the same reason the
     /// sub-tabs carry stable `.id`s.
-    var selectedNamespace: String?
+    var selectedMemoryNamespace: String?
+    /// An indexed codesearch namespace opened from the sidebar, or `nil` for the
+    /// Code Intelligence landing. Distinct from `selectedMemoryNamespace`: the
+    /// two sections have unrelated namespace sets (memory groups *projects*,
+    /// codesearch groups *indexed repositories*).
+    var selectedCodeNamespace: String?
 
     /// The sidebar's current selection, projected from the state above so the
     /// two stay in sync. Setting it routes: a section switches the detail
@@ -67,11 +76,14 @@ final class NavigationModel {
             if section == .proxy, let server = selectedServer {
                 return .proxyServer(server)
             }
-            if section == .memory, let ns = selectedNamespace {
+            if section == .memory, let ns = selectedMemoryNamespace {
                 return .memoryNamespace(ns)
             }
             if section == .memory, let tab = selectedMemoryTab {
                 return .memoryTab(tab)
+            }
+            if section == .code, let ns = selectedCodeNamespace {
+                return .codeNamespace(ns)
             }
             return section.map(SidebarItem.section)
         }
@@ -85,18 +97,22 @@ final class NavigationModel {
                 section = s
                 selectedServer = nil
                 selectedMemoryTab = nil
-                selectedNamespace = nil
+                selectedMemoryNamespace = nil
+                selectedCodeNamespace = nil
             case .proxyServer(let name):
                 section = .proxy
                 selectedServer = name
             case .memoryTab(let tab):
                 section = .memory
                 selectedMemoryTab = tab
-                selectedNamespace = nil
+                selectedMemoryNamespace = nil
             case .memoryNamespace(let ns):
                 section = .memory
-                selectedNamespace = ns
+                selectedMemoryNamespace = ns
                 selectedMemoryTab = nil
+            case .codeNamespace(let ns):
+                section = .code
+                selectedCodeNamespace = ns
             case nil:
                 break
             }

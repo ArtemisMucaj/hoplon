@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             state.startProxy()
             state.startGuardrailsIfEnabled()
             state.startMemoryIfEnabled()
+            state.startCodesearchIfEnabled()
         }
     }
 
@@ -20,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             state.stopProxy()
             state.stopGuardrails()
             state.stopMemory()
+            state.stopCodesearch()
         }
     }
 }
@@ -50,18 +52,22 @@ struct HoplonApp: App {
                     .keyboardShortcut("2", modifiers: .command)
                 Button("Memory") { nav.sidebarSelection = .section(.memory) }
                     .keyboardShortcut("3", modifiers: .command)
+                Button("Code Intelligence") { nav.sidebarSelection = .section(.code) }
+                    .keyboardShortcut("4", modifiers: .command)
             }
             CommandMenu("Services") {
                 Button("Start All Services") {
                     state.startProxy()
                     state.startGuardrails()
                     state.startMemory()
+                    state.startCodesearch()
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 Button("Stop All Services") {
                     state.stopProxy()
                     state.stopGuardrails()
                     state.stopMemory()
+                    state.stopCodesearch()
                 }
                 .keyboardShortcut(".", modifiers: .command)
             }
@@ -72,7 +78,8 @@ struct HoplonApp: App {
             MenuBarView()
                 .environment(state)
         } label: {
-            if state.proxyManager.isStarting || state.guardrailsManager.isStarting || state.memoryManager.isStarting {
+            if state.proxyManager.isStarting || state.guardrailsManager.isStarting
+                || state.memoryManager.isStarting || state.codesearchManager.isStarting {
                 HStack(spacing: 4) {
                     ProgressView()
                         .scaleEffect(0.6)
@@ -84,6 +91,7 @@ struct HoplonApp: App {
                 let anyRunning = state.proxyManager.isRunning
                     || state.guardrailsManager.isRunning
                     || state.memoryManager.isRunning
+                    || state.codesearchManager.isRunning
                 menuBarIcon(dimmed: !anyRunning)
             }
         }

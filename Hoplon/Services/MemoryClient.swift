@@ -163,11 +163,45 @@ struct MemoryClient {
 
     /// `POST /api/import` — import one transcript file by path. Extraction calls
     /// the configured LLM, so this is slow; the timeout is generous.
-    func importSession(path: String, force: Bool = false) async throws -> MemoryImportResponse {
+    func importSessionFile(path: String, force: Bool = false) async throws -> MemoryImportResponse {
         try await post("/api/import",
                        body: MemoryImportRequest(path: path, force: force),
                        type: MemoryImportResponse.self,
                        timeout: 600)
+    }
+
+    // MARK: - Session discovery + background import
+
+    /// `GET /api/sessions/discover` — importable sessions found on disk, newest
+    /// first. Distinct from `sessions()` above, which lists what's already in
+    /// the store. Discovery walks three session stores, so it can be slow on a
+    /// large backlog — hence the generous timeout.
+    func discoverSessions() async throws -> [DiscoveredSessionDTO] {
+        try await get("/api/sessions/discover", type: DiscoveredSessionsResponse.self, timeout: 45).sessions
+    }
+
+    /// `GET /api/sessions/transcript?source=&id=` — one session's full transcript.
+    func sessionTranscript(source: String, id: String) async throws -> SessionTranscriptDTO {
+        let q = [URLQueryItem(name: "source", value: source), URLQueryItem(name: "id", value: id)]
+        return try await get("/api/sessions/transcript", query: q, type: SessionTranscriptDTO.self, timeout: 30)
+    }
+
+    /// `GET /api/sessions/import` — the import status of every tracked session.
+    func sessionImportStatuses() async throws -> [SessionImportStatusDTO] {
+        try await get("/api/sessions/import", type: SessionImportStatusResponse.self, timeout: 10).statuses
+    }
+
+    /// `POST /api/sessions/import` — queue a background import. Returns once the
+    /// server has accepted it (202); the import itself runs server-side and is
+    /// polled via `sessionImportStatuses()`.
+    func importSession(source: String, id: String, force: Bool = false) async throws {
+        struct Accepted: Decodable { let queued: Bool? }
+        _ = try await post(
+            "/api/sessions/import",
+            body: SessionImportRequest(source: source, id: id, force: force),
+            type: Accepted.self,
+            timeout: 15
+        )
     }
 
     // MARK: - Namespaces
@@ -218,12 +252,126 @@ struct MemoryClient {
                        timeout: 300)
     }
 
-    /// `POST /api/dream` — one dream cycle: harvest finished sessions, then
-    /// consolidate the store. Long-running; the timeout matches.
-    func dream(idleMinutes: Int? = nil) async throws -> MemoryDreamResponse {
-        try await post("/api/dream",
-                       body: MemoryDreamRequest(idleMinutes: idleMinutes),
-                       type: MemoryDreamResponse.self,
-                       timeout: 1800)
+    // MARK: - LLM endpoints
+
+    /// `GET /api/llm/endpoints` — registered endpoints plus the active bindings.
+    func llmConfig() async throws -> MemoryLlmConfig {
+        try await get("/api/llm/endpoints", type: MemoryLlmConfig.self, timeout: 10)
+    }
+
+    /// `PUT /api/llm/endpoints/{name}` — register or update one endpoint.
+    @discardableResult
+    func upsertLlmEndpoint(name: String, _ request: MemoryLlmUpsertRequest) async throws -> MemoryLlmConfig {
+        var req = URLRequest(url: try url("/api/llm/endpoints/\(encodeSegment(name))"))
+        req.httpMethod = "PUT"
+        req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(request)
+        let (data, response) = try await session.data(for: req)
+        return try decode(MemoryLlmConfig.self, from: data, response: response)
+    }
+
+    /// `DELETE /api/llm/endpoints/{name}` — remove an endpoint (and any role
+    /// bound to it).
+    @discardableResult
+    func deleteLlmEndpoint(name: String) async throws -> MemoryLlmConfig {
+        try await delete("/api/llm/endpoints/\(encodeSegment(name))", type: MemoryLlmConfig.self)
+    }
+
+    /// `POST /api/llm/active` — bind (or clear) the endpoint used for a role.
+    @discardableResult
+    func setLlmActive(name: String?, role: LlmRole) async throws -> MemoryLlmConfig {
+        try await post("/api/llm/active",
+                       body: MemoryLlmSetActiveRequest(name: name, role: role),
+                       type: MemoryLlmConfig.self,
+                       timeout: 15)
+    }
+
+    /// `GET /api/llm/models` — enumerate a server's models, either from a
+    /// registered endpoint or a raw base URL (so a UI can validate before save).
+    func llmModels(endpoint: String? = nil, baseUrl: String? = nil) async throws -> MemoryLlmModelsResponse {
+        var query: [URLQueryItem] = []
+        if let endpoint { query.append(URLQueryItem(name: "endpoint", value: endpoint)) }
+        if let baseUrl { query.append(URLQueryItem(name: "base_url", value: baseUrl)) }
+        return try await get("/api/llm/models", query: query, type: MemoryLlmModelsResponse.self, timeout: 30)
+    }
+
+    /// Probe an OpenAI-compatible server directly (not via memory-rs) for its
+    /// `/v1/models`. Used to auto-detect a locally-running LM Studio / vLLM so a
+    /// first-run user gets memory extraction working without hand-configuring an
+    /// endpoint. Returns the model ids, or nil if nothing is listening / it
+    /// isn't OpenAI-compatible.
+    static func probeOpenAIModels(baseUrl: String, timeout: TimeInterval = 2) async -> [String]? {
+        // Accept both ".../v1" and a bare host; normalize to ".../v1/models".
+        let trimmed = baseUrl.hasSuffix("/") ? String(baseUrl.dropLast()) : baseUrl
+        let modelsURL = trimmed.hasSuffix("/v1") ? trimmed + "/models" : trimmed + "/v1/models"
+        guard let url = URL(string: modelsURL) else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
+        guard let (data, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
+        else { return nil }
+        // OpenAI `/v1/models` shape: { "data": [ { "id": "..." }, ... ] }.
+        struct ModelsList: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
+        guard let list = try? JSONDecoder().decode(ModelsList.self, from: data) else { return nil }
+        return list.data.map(\.id)
+    }
+
+    // MARK: - Copilot device-flow login
+
+    /// `POST /api/llm/copilot/login` — start (or restart) the GitHub device
+    /// flow. Returns the initial status (pending with the code + URL, or failed).
+    @discardableResult
+    func startCopilotLogin() async throws -> CopilotLoginStatus {
+        var req = URLRequest(url: try url("/api/llm/copilot/login"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        let (data, response) = try await session.data(for: req)
+        return try decode(CopilotLoginStatus.self, from: data, response: response)
+    }
+
+    /// `PUT /api/llm/endpoints/copilot` — pin the Copilot model. Copilot is a
+    /// reserved name rather than a registered endpoint, so this writes the
+    /// copilot config instead of an OpenAI one.
+    @discardableResult
+    func setCopilotModel(_ model: String) async throws -> MemoryLlmConfig {
+        try await upsertLlmEndpoint(
+            name: MemoryLlmConfig.copilotEndpointName,
+            MemoryLlmUpsertRequest(baseUrl: nil, model: model, embeddingModel: nil,
+                                   apiKey: nil, setActive: nil)
+        )
+    }
+
+    /// `GET /api/llm/copilot/login` — poll the device flow's progress.
+    func copilotLoginStatus() async throws -> CopilotLoginStatus {
+        try await get("/api/llm/copilot/login", type: CopilotLoginStatus.self, timeout: 10)
+    }
+
+    // MARK: - Dream scheduler
+
+    /// `GET /api/dream` — the scheduler's settings plus whether a cycle is
+    /// currently running.
+    func dreamStatus() async throws -> DreamStatus {
+        try await get("/api/dream", type: DreamStatus.self, timeout: 10)
+    }
+
+    /// `PUT /api/dream/config` — partial update, applied live and persisted.
+    /// Returns the merged effective config.
+    @discardableResult
+    func updateDreamConfig(_ request: DreamConfigRequest) async throws -> DreamConfigResponse {
+        var req = URLRequest(url: try url("/api/dream/config"))
+        req.httpMethod = "PUT"
+        req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(request)
+        let (data, response) = try await session.data(for: req)
+        return try decode(DreamConfigResponse.self, from: data, response: response)
+    }
+
+    /// `POST /api/dream` — start one cycle in the background. Returns as soon as
+    /// the server accepts it (202); poll `dreamStatus()` for `running`.
+    func triggerDream() async throws {
+        struct Accepted: Decodable { let started: Bool? }
+        _ = try await post("/api/dream", body: [String: String](), type: Accepted.self, timeout: 15)
     }
 }

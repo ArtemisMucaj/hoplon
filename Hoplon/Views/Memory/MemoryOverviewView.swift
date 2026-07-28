@@ -19,7 +19,6 @@ struct MemoryOverviewView: View {
             VStack(alignment: .leading, spacing: 20) {
                 statsSection
                 namespacesSection
-                proxySection
                 if let actionError {
                     Text(actionError)
                         .font(.caption)
@@ -162,46 +161,6 @@ struct MemoryOverviewView: View {
         .onTapGesture { nav.sidebarSelection = .memoryNamespace(ns.name) }
     }
 
-    // MARK: - Proxy wiring
-
-    @ViewBuilder
-    private var proxySection: some View {
-        @Bindable var state = state
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Agent access")
-            CardContainer {
-                VStack(spacing: 0) {
-                    HStack(spacing: 10) {
-                        Image(systemName: AppSection.proxy.systemImage).foregroundStyle(Color.accentColor)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Serve through the proxy").font(.callout.weight(.medium))
-                            Text("Keeps a `memory` entry in the proxy's servers.json pointing at \(manager.mcpEndpoint), so agents reach memory tools through the one endpoint.")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $state.registerMemoryWithProxy)
-                            .labelsHidden()
-                    }
-                    .padding(12)
-
-                    // A hand-written `memory` server wins; say so, because the
-                    // toggle otherwise looks broken.
-                    if ProxyRegistration.hasUserDefinedEntry(in: state.servers) {
-                        Divider()
-                        HStack(spacing: 8) {
-                            Image(systemName: "info.circle").foregroundStyle(.orange)
-                            Text("servers.json already defines a `memory` server of your own — Hoplon is leaving it alone.")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                    }
-                }
-            }
-        }
-    }
-
     // MARK: - Actions
 
     private var trimmedNew: String {
@@ -230,7 +189,7 @@ struct MemoryOverviewView: View {
         Task {
             do {
                 _ = try await manager.makeClient().deleteNamespace(ns.name)
-                if nav.selectedNamespace == ns.name { nav.selectedNamespace = nil }
+                if nav.selectedMemoryNamespace == ns.name { nav.selectedMemoryNamespace = nil }
                 manager.refresh()
             } catch {
                 actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

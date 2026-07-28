@@ -30,5 +30,11 @@ bash "$SCRIPTS/download_memory_binary.sh" || {
 }
 
 echo
+echo "════ codesearch (code intelligence) ════"
+# Built from source, not downloaded: the app targets the post-extraction
+# codesearch (memory moved to memory-rs) and no release carries that yet.
+bash "$SCRIPTS/build_codesearch_binary.sh"
+
+echo
 echo "════ done ════"
 ls -lh "$SCRIPTS/../Hoplon/Resources/"

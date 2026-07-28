@@ -40,7 +40,7 @@ struct MemoryDetailView: View {
                     // view doesn't re-create the tab (which would wipe its state
                     // and restart in-flight loads).
                     Group {
-                        if let ns = nav.selectedNamespace {
+                        if let ns = nav.selectedMemoryNamespace {
                             NamespaceDetailView(namespace: ns)
                                 .id("memory.namespace.\(ns)")
                         } else {

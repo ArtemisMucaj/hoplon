@@ -81,15 +81,68 @@ private struct CloseTrafficLight: View {
 
 // MARK: - Settings window
 
-/// The Settings window: a sidebar picks a service, its pane fills the detail.
-/// Changes apply **immediately** — every field binds straight to `AppState`,
-/// whose setters persist and restart the affected service — so there is no
-/// Done/Apply step. A top bar carries only a red Close button.
+/// A row in the Settings sidebar: a top-level service, or a Memory sub-pane
+/// nested beneath it (Process / Dream) — mirroring the main window's nested
+/// sidebar.
+enum SettingsItem: Hashable {
+    case service(AppSection)
+    case memoryPane(MemoryPane)
+    case codePane(CodePane)
+}
+
+/// The Code Intelligence settings sub-panes.
+enum CodePane: String, CaseIterable, Identifiable, Hashable {
+    case process, llm
+    /// Namespaced: `MemoryPane` has cases of the same raw value, and both
+    /// enums' rows live in ONE `List`. A bare `rawValue` makes "code.llm" and
+    /// "memory.llm" collide, and SwiftUI then treats them as one row — both
+    /// highlight together and each shows the other's pane.
+    var id: String { "code.\(rawValue)" }
+    var title: String {
+        switch self {
+        case .process: return "Process"
+        case .llm:     return "LLM"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .process: return "gearshape.2"
+        case .llm:     return "sparkles"
+        }
+    }
+}
+
+/// The Memory settings sub-panes.
+enum MemoryPane: String, CaseIterable, Identifiable, Hashable {
+    case process, llm, dream
+    /// Namespaced — see the note on `CodePane.id`.
+    var id: String { "memory.\(rawValue)" }
+    var title: String {
+        switch self {
+        case .process: return "Process"
+        case .llm:     return "LLM"
+        case .dream:   return "Dream"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .process: return "gearshape.2"
+        case .llm:     return "sparkles"
+        case .dream:   return "moon.stars"
+        }
+    }
+}
+
+/// The Settings window: a sidebar picks a service (or a Memory sub-pane), its
+/// pane fills the detail. Changes apply **immediately** — every field binds
+/// straight to `AppState`, whose setters persist and restart the affected
+/// service — so there is no Done/Apply step. A top bar carries only a red Close
+/// button.
 struct SettingsView: View {
     @Environment(AppState.self) var state
     @Environment(\.dismiss) var dismiss
 
-    @State private var selection: AppSection? = .proxy
+    @State private var selection: SettingsItem? = .service(.proxy)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,6 +154,15 @@ struct SettingsView: View {
                         serviceRow(.proxy)
                         serviceRow(.guardrails)
                         serviceRow(.memory)
+                        // Memory sub-panes, nested like the main UI.
+                        ForEach(MemoryPane.allCases) { pane in
+                            memoryPaneRow(pane)
+                        }
+                        serviceRow(.code)
+                        // Code Intelligence sub-panes, nested like the main UI.
+                        ForEach(CodePane.allCases) { pane in
+                            codePaneRow(pane)
+                        }
                     }
                 }
                 .listStyle(.sidebar)
@@ -142,7 +204,29 @@ struct SettingsView: View {
                 StatusDot(status: status, size: 8)
             }
         }
-        .tag(section)
+        .tag(SettingsItem.service(section))
+    }
+
+    @ViewBuilder
+    private func memoryPaneRow(_ pane: MemoryPane) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+            Text(pane.title).lineLimit(1)
+            Spacer()
+        }
+        .padding(.leading, 18)
+        .tag(SettingsItem.memoryPane(pane))
+    }
+
+    @ViewBuilder
+    private func codePaneRow(_ pane: CodePane) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+            Text(pane.title).lineLimit(1)
+            Spacer()
+        }
+        .padding(.leading, 18)
+        .tag(SettingsItem.codePane(pane))
     }
 
     // MARK: Detail
@@ -150,11 +234,16 @@ struct SettingsView: View {
     @ViewBuilder
     private var detailPane: some View {
         switch selection {
-        case .proxy:      ProxySettingsPane()
-        case .guardrails: GuardrailsSettingsPane()
-        case .memory:     MemorySettingsPane()
-        case .code:       CodeIntelligencePlaceholderView()
-        case nil:         ContentUnavailableView("Select a Setting", systemImage: "gearshape")
+        case .service(.proxy):      ProxySettingsPane()
+        case .service(.guardrails): GuardrailsSettingsPane()
+        case .service(.memory):     MemoryProcessPane()      // section row → Process
+        case .service(.code):       CodeProcessPane()         // section row → Process
+        case .memoryPane(.process): MemoryProcessPane()
+        case .memoryPane(.llm):     MemoryLlmPane()
+        case .memoryPane(.dream):   MemoryDreamPane()
+        case .codePane(.process):   CodeProcessPane()
+        case .codePane(.llm):       CodeLlmPane()
+        case nil:                   ContentUnavailableView("Select a Setting", systemImage: "gearshape")
         }
     }
 
@@ -180,6 +269,10 @@ struct SettingsView: View {
         }
         if state.memoryEnabled {
             if let e = claim(state.memoryPort, "Memory") { return e }
+        }
+        if state.codesearchEnabled {
+            if let e = claim(state.codesearchMcpPort, "Code Intelligence MCP") { return e }
+            if let e = claim(state.codesearchMgmtPort, "Code Intelligence API") { return e }
         }
         return nil
     }
@@ -252,9 +345,9 @@ private struct GuardrailsSettingsPane: View {
     }
 }
 
-// MARK: - Memory pane
+// MARK: - Memory: Process pane
 
-private struct MemorySettingsPane: View {
+private struct MemoryProcessPane: View {
     @Environment(AppState.self) var state
 
     var body: some View {
@@ -299,6 +392,122 @@ private struct MemorySettingsPane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Memory")
+        .navigationTitle("Process")
+    }
+}
+
+// MARK: - Memory: LLM pane
+
+/// memory-rs's own LLM endpoints. Needs the server running: the config lives in
+/// its config.json and is read/written through its management API.
+private struct MemoryLlmPane: View {
+    @Environment(AppState.self) var state
+    private var manager: MemoryManager { state.memoryManager }
+
+    var body: some View {
+        Group {
+            if manager.isRunning {
+                MemoryLlmView().environment(state)
+            } else {
+                EmptyStateView(
+                    icon: "sparkles",
+                    title: "Memory is stopped",
+                    message: "Start Memory to configure its LLM endpoints and discover models.",
+                    actionTitle: state.memoryEnabled ? nil : "Enable",
+                    action: state.memoryEnabled ? nil : { state.memoryEnabled = true }
+                )
+            }
+        }
+        .navigationTitle("LLM")
+    }
+}
+
+// MARK: - Memory: Dream pane
+
+/// The dream scheduler's settings. Needs the server running: the config lives
+/// in memory-rs's config.json and is read/written through its management API,
+/// so there is nothing to show (or save) while the service is stopped.
+private struct MemoryDreamPane: View {
+    @Environment(AppState.self) var state
+    private var manager: MemoryManager { state.memoryManager }
+
+    var body: some View {
+        Group {
+            if manager.isRunning {
+                DreamSettingsView().environment(state)
+            } else {
+                EmptyStateView(
+                    icon: "moon.stars",
+                    title: "Memory is stopped",
+                    message: "Start Memory to configure dreaming and auto-import.",
+                    actionTitle: state.memoryEnabled ? nil : "Enable",
+                    action: state.memoryEnabled ? nil : { state.memoryEnabled = true }
+                )
+            }
+        }
+        .navigationTitle("Dream")
+    }
+}
+
+// MARK: - Code Intelligence: Process pane
+
+private struct CodeProcessPane: View {
+    @Environment(AppState.self) var state
+
+    var body: some View {
+        @Bindable var state = state
+        Form {
+            Section("Service") {
+                Toggle("Enabled", isOn: $state.codesearchEnabled)
+                Text("Runs `codesearch serve`: an MCP server plus a REST management API for semantic search, call graphs, and community detection.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if state.codesearchEnabled {
+                Section("Endpoints") {
+                    LabeledContent("MCP Port") {
+                        PortField(value: $state.codesearchMcpPort).frame(width: 80, height: 22)
+                    }
+                    LabeledContent("Management Port") {
+                        PortField(value: $state.codesearchMgmtPort).frame(width: 80, height: 22)
+                    }
+                    Toggle("Bind publicly (0.0.0.0)", isOn: $state.codesearchPublic)
+                    Text("Point MCP clients at http://127.0.0.1:\(state.codesearchMcpPort)/mcp. The app drives the management API on port \(state.codesearchMgmtPort).")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if state.codesearchMcpPort == state.codesearchMgmtPort {
+                        Label("MCP and Management ports must be different.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Process")
+    }
+}
+
+// MARK: - Code Intelligence: LLM pane
+
+/// codesearch's LLM backends — endpoint management and model discovery. Needs
+/// the server running: the endpoints live in its config and are read/written
+/// through the management API, so there is nothing to show while it's stopped.
+private struct CodeLlmPane: View {
+    @Environment(AppState.self) var state
+    private var manager: CodesearchManager { state.codesearchManager }
+
+    var body: some View {
+        Group {
+            if manager.isRunning {
+                LlmView().environment(state)
+            } else {
+                EmptyStateView(
+                    icon: "sparkles",
+                    title: "Code Intelligence is stopped",
+                    message: "Start Code Intelligence to configure its LLM endpoints and discover models.",
+                    actionTitle: state.codesearchEnabled ? nil : "Enable",
+                    action: state.codesearchEnabled ? nil : { state.codesearchEnabled = true }
+                )
+            }
+        }
+        .navigationTitle("LLM")
     }
 }

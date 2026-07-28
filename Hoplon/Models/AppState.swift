@@ -14,8 +14,6 @@ enum AppSection: String, CaseIterable, Identifiable {
     case proxy
     case guardrails
     case memory
-    /// codesearch is mid-rework upstream; the row is present but inert so the
-    /// shape of the app is visible. Wire it up when its API settles.
     case code
 
     var id: String { rawValue }
@@ -38,9 +36,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Sections backed by a supervised binary. `code` is a placeholder until
-    /// codesearch's rework lands, so it has no manager and no status.
-    var isImplemented: Bool { self != .code }
 }
 
 // MARK: - Private Codable helpers
@@ -82,6 +77,7 @@ final class AppState {
     let proxyManager: ProxyManager
     let guardrailsManager: GuardrailsManager
     let memoryManager: MemoryManager
+    let codesearchManager: CodesearchManager
     var discoveredTools: [String: [DiscoveredTool]] = [:]
     var isDiscoveringTools = false
     var presets: [Preset] = []
@@ -172,6 +168,44 @@ final class AppState {
             restartMemoryIfRunning()
         }
     }
+    // MARK: - Code Intelligence settings (persisted in UserDefaults)
+
+    /// Whether the codesearch `serve` process should run. Toggling starts/stops it.
+    var codesearchEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(codesearchEnabled, forKey: "codesearchEnabled")
+            if codesearchEnabled { startCodesearch() } else { stopCodesearch() }
+        }
+    }
+    /// Port for the bundled MCP HTTP server (`--mcp-port`).
+    var codesearchMcpPort: Int {
+        didSet {
+            let clamped = max(1024, min(65535, codesearchMcpPort))
+            if codesearchMcpPort != clamped { codesearchMcpPort = clamped; return }
+            UserDefaults.standard.set(codesearchMcpPort, forKey: "codesearchMcpPort")
+            codesearchManager.mcpPort = codesearchMcpPort
+            restartCodesearchIfRunning()
+        }
+    }
+    /// Port for the REST/JSON management API (`--mgmt-port`).
+    var codesearchMgmtPort: Int {
+        didSet {
+            let clamped = max(1024, min(65535, codesearchMgmtPort))
+            if codesearchMgmtPort != clamped { codesearchMgmtPort = clamped; return }
+            UserDefaults.standard.set(codesearchMgmtPort, forKey: "codesearchMgmtPort")
+            codesearchManager.mgmtPort = codesearchMgmtPort
+            restartCodesearchIfRunning()
+        }
+    }
+    /// Bind both servers on 0.0.0.0 instead of 127.0.0.1 (`--public`).
+    var codesearchPublic: Bool {
+        didSet {
+            UserDefaults.standard.set(codesearchPublic, forKey: "codesearchPublic")
+            codesearchManager.publicBind = codesearchPublic
+            restartCodesearchIfRunning()
+        }
+    }
+
     /// Whether to keep a `memory` entry in the proxy's servers.json pointing at
     /// the running memory service, so agents reach memory tools through the one
     /// proxy endpoint. Turning it off removes the managed entry.
@@ -187,6 +221,7 @@ final class AppState {
     @ObservationIgnored private var reloadWorkItem: DispatchWorkItem?
     @ObservationIgnored private var guardrailsRestartWork: DispatchWorkItem?
     @ObservationIgnored private var memoryRestartWork: DispatchWorkItem?
+    @ObservationIgnored private var codesearchRestartWork: DispatchWorkItem?
 
     /// Management API port is always the MCP port + 1 (panoply's layout).
     var apiPort: Int { port + 1 }
@@ -212,12 +247,18 @@ final class AppState {
         return .stopped
     }
 
+    var codesearchStatus: ServiceStatus {
+        if codesearchManager.isStarting { return .starting }
+        if codesearchManager.isRunning { return codesearchManager.isReachable ? .running : .runningUnreachable }
+        return .stopped
+    }
+
     func status(for section: AppSection) -> ServiceStatus? {
         switch section {
         case .proxy:      return proxyStatus
         case .guardrails: return guardrailsStatus
         case .memory:     return memoryStatus
-        case .code:       return nil   // not wired up yet
+        case .code:       return codesearchStatus
         }
     }
 
@@ -281,11 +322,33 @@ final class AppState {
         self.memoryPort    = memPort
         self.memoryPublic  = memPublic
         self.memoryManager = MemoryManager(port: memPort, publicBind: memPublic)
+        // Same local model server guardrails points at, so a first run gets
+        // memory extraction without setup. Separate from codesearch's — the two
+        // services keep independent LLM configs.
+        self.memoryManager.llmAutodetectBase = grBackend
         // Default ON: the whole point of running both is that agents reach
         // memory through the single proxy endpoint. `object(forKey:)` (not
         // `bool(forKey:)`) so an unset default reads as "not yet chosen".
         self.registerMemoryWithProxy =
             (UserDefaults.standard.object(forKey: "registerMemoryWithProxy") as? Bool) ?? true
+
+        // Code Intelligence settings (fall back to codesearch's `serve` defaults).
+        let savedCsMcpPort  = UserDefaults.standard.integer(forKey: "codesearchMcpPort")
+        let savedCsMgmtPort = UserDefaults.standard.integer(forKey: "codesearchMgmtPort")
+        let csMcpPort  = (1024...65535).contains(savedCsMcpPort) ? savedCsMcpPort : 8677
+        var csMgmtPort = (1024...65535).contains(savedCsMgmtPort) ? savedCsMgmtPort : 8676
+        // MCP and management ports must differ; bump if a stale/corrupt value collides.
+        if csMgmtPort == csMcpPort { csMgmtPort = csMcpPort == 65535 ? csMcpPort - 1 : csMcpPort + 1 }
+        let csPublic = UserDefaults.standard.bool(forKey: "codesearchPublic")
+        self.codesearchEnabled  = UserDefaults.standard.bool(forKey: "codesearchEnabled")
+        self.codesearchMcpPort  = csMcpPort
+        self.codesearchMgmtPort = csMgmtPort
+        self.codesearchPublic   = csPublic
+        self.codesearchManager  = CodesearchManager(mcpPort: csMcpPort, mgmtPort: csMgmtPort, publicBind: csPublic)
+        // Auto-register the same local model server guardrails points at as
+        // codesearch's LLM endpoint (if the user hasn't configured one), so
+        // community names + call-flow explanations work without setup.
+        self.codesearchManager.llmAutodetectBase = grBackend
 
         // Bootstrap preset state from disk so the UI is populated before the proxy starts.
         let (initialPresets, initialActiveID) = AppState.loadPresetsFromDisk()
@@ -507,6 +570,34 @@ final class AppState {
 
     private func restartMemoryIfRunning() {
         if memoryManager.isRunning || memoryManager.isStarting { restartMemory() }
+    }
+
+    // MARK: - Codesearch process
+
+    /// Start codesearch if the user has enabled it. Called at app launch.
+    func startCodesearchIfEnabled() {
+        if codesearchEnabled { startCodesearch() }
+    }
+
+    func startCodesearch() { codesearchManager.startBundled() }
+
+    func stopCodesearch() {
+        codesearchRestartWork?.cancel()
+        codesearchRestartWork = nil
+        codesearchManager.stop()
+    }
+
+    /// Restart, coalescing rapid successive calls into one stop + delayed start.
+    func restartCodesearch() {
+        codesearchManager.stop()
+        codesearchRestartWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.startCodesearch() }
+        codesearchRestartWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func restartCodesearchIfRunning() {
+        if codesearchManager.isRunning || codesearchManager.isStarting { restartCodesearch() }
     }
 
     // MARK: - Memory ▸ Proxy registration

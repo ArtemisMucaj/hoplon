@@ -1,310 +1,387 @@
 import SwiftUI
-import AppKit
-import UniformTypeIdentifiers
 
-/// Getting finished assistant sessions into long-term memory.
+/// Import finished assistant sessions (Claude Code / OpenCode / Zed) into
+/// long-term memory — the native counterpart of the memory-rs TUI's interactive
+/// import screen.
 ///
-/// Two paths, because memory-rs owns session discovery but only exposes it
-/// through the dream harvest, not as a REST endpoint:
+/// Left: the discovered-session list with per-row import markers
+/// (`[ ]` none · `[…]` queued · `[⟳] importing` · `[✓]` done/already · `[✗]`
+/// failed). Right: the highlighted session's full transcript, per turn.
 ///
-/// - **Run a dream cycle** — the bulk path. Server-side it discovers every
-///   finished session (Claude Code, OpenCode, Zed), imports the new ones, then
-///   consolidates the store.
-/// - **Import a transcript** — the precise path, for one file you point at.
-///
-/// Below both, the sessions the server has already recorded, including failed
-/// attempts (memory-rs records those so the harvest stops retrying them).
+/// Imports run in the **server's** background and are tracked by
+/// `SessionImportManager` (owned by `MemoryManager`, not this view), so an
+/// import keeps progressing after you leave this tab — exactly what the TUI's
+/// background worker does.
 struct SessionImportView: View {
     @Environment(AppState.self) var state
 
-    private var manager: MemoryManager { state.memoryManager }
-    private var importer: SessionImportManager { state.memoryManager.sessionImport }
+    @State private var selection: DiscoveredSessionDTO.ID?
+
+    private var manager: SessionImportManager { state.memoryManager.sessionImport }
+
+    private var selectedSession: DiscoveredSessionDTO? {
+        guard let selection else { return manager.sessions.first }
+        return manager.sessions.first { $0.id == selection }
+    }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                dreamSection
-                fileSection
-                sessionsSection
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ResizableSplit(leftIdeal: 400, leftMin: 240, rightMin: 300) {
+                sessionList
+            } right: {
+                transcriptPane
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { importer.loadSessions() }
-        .navigationTitle("Import")
-    }
-
-    // MARK: - Dream
-
-    @ViewBuilder
-    private var dreamSection: some View {
-        @Bindable var importer = importer
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Harvest finished sessions")
-            CardContainer {
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "moon.stars.fill")
-                            .foregroundStyle(.purple)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Dream cycle").font(.callout.weight(.medium))
-                            Text("Finds every session idle for at least the interval below, imports the ones memory hasn't seen, then consolidates what it learned. Each new session costs an LLM call, so a first run over a backlog takes a while.")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            HStack(spacing: 8) {
-                                Text("Idle for at least").font(.caption)
-                                Stepper(value: $importer.idleMinutes, in: 5...1440, step: 5) {
-                                    Text("\(importer.idleMinutes) min")
-                                        .font(.caption.monospacedDigit())
-                                        .frame(minWidth: 56, alignment: .leading)
-                                }
-                                .fixedSize()
-                            }
-                            .padding(.top, 2)
-                        }
-                        Spacer()
-                        Button {
-                            importer.runDream()
-                        } label: {
-                            if importer.isDreaming {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small)
-                                    Text("Dreaming…")
-                                }
-                            } else {
-                                Label("Run Dream", systemImage: "play.fill")
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(importer.isBusy)
-                    }
-                    .padding(12)
-
-                    if let report = importer.lastDream {
-                        Divider()
-                        dreamReport(report)
-                    }
-                    if let error = importer.dreamError {
-                        Divider()
-                        errorRow(error)
-                    }
-                }
-            }
+        // Fill the section so the view doesn't resize when discovery finishes.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Refresh on appear so a row imported while away shows ✓; resume polling
+        // if an import is still in flight.
+        .task {
+            await manager.discover()
+            if manager.hasActiveImports { manager.ensurePolling() }
         }
     }
 
-    @ViewBuilder
-    private func dreamReport(_ report: MemoryDreamResponse) -> some View {
-        HStack(spacing: 18) {
-            reportStat("Eligible", report.sessionsEligible, .secondary)
-            reportStat("Imported", report.sessionsImported, .green)
-            reportStat("Failed", report.sessionsFailed, report.sessionsFailed > 0 ? .red : .secondary)
-            reportStat("Clusters", report.clustersFound, .indigo)
-            reportStat("Applied", report.operationsApplied, .cyan)
-            reportStat("Skipped", report.operationsSkipped, .secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-    }
+    // MARK: - Header
 
-    private func reportStat(_ label: String, _ value: Int, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("\(value)")
-                .font(.callout.weight(.semibold).monospacedDigit())
-                .foregroundStyle(color)
-            Text(label.uppercased()).font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Single file
-
-    @ViewBuilder
-    private var fileSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Import one transcript")
-            CardContainer {
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "doc.text.fill")
-                            .foregroundStyle(.cyan)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Pick a session log").font(.callout.weight(.medium))
-                            Text("A Claude Code transcript (~/.claude/projects/<project>/<id>.jsonl) or any JSONL chat log with one {\"role\", \"content\"} object per line.")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        Button {
-                            pickTranscript()
-                        } label: {
-                            if importer.importingPath != nil {
-                                HStack(spacing: 6) {
-                                    ProgressView().controlSize(.small)
-                                    Text("Importing…")
-                                }
-                            } else {
-                                Label("Choose File…", systemImage: "folder")
-                            }
-                        }
-                        .disabled(importer.isBusy)
-                    }
-                    .padding(12)
-
-                    if let result = importer.lastImport {
-                        Divider()
-                        importResult(result)
-                    }
-                    if let error = importer.importError {
-                        Divider()
-                        errorRow(error)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func importResult(_ result: MemoryImportResponse) -> some View {
-        HStack(spacing: 10) {
-            if result.imported {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Imported \(result.messageCount ?? 0) message\((result.messageCount ?? 0) == 1 ? "" : "s")")
-                        .font(.callout)
-                    Text("\(result.operationsApplied ?? 0) memory operation\((result.operationsApplied ?? 0) == 1 ? "" : "s") applied, \(result.operationsSkipped ?? 0) skipped")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            } else {
-                Image(systemName: "info.circle.fill").foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Already imported").font(.callout)
-                    Text("This session is already in memory. Re-import it to overwrite what was extracted.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let path = importer.lastImportPath {
-                    Button("Re-import") { importer.importFile(at: path, force: true) }
-                        .buttonStyle(.borderless)
-                        .disabled(importer.isBusy)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-    }
-
-    // MARK: - Imported sessions
-
-    @ViewBuilder
-    private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Imported sessions") {
-                Button { importer.loadSessions() } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(importer.isLoadingSessions)
-            }
-
-            if let error = importer.sessionsError {
-                CardContainer { errorRow(error) }
-            } else if importer.sessions.isEmpty {
-                CardContainer {
-                    HStack(spacing: 8) {
-                        if importer.isLoadingSessions {
-                            ProgressView().controlSize(.small)
-                            Text("Loading…").font(.callout).foregroundStyle(.secondary)
-                        } else {
-                            Text("Nothing imported yet — run a dream cycle to harvest finished sessions.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(12)
-                }
-            } else {
-                CardContainer {
-                    VStack(spacing: 0) {
-                        ForEach(Array(importer.sessions.enumerated()), id: \.element.id) { idx, session in
-                            sessionRow(session)
-                            if idx < importer.sessions.count - 1 { Divider() }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func sessionRow(_ session: MemorySession) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: session.didFail ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundStyle(session.didFail ? .red : .green)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
+    private var header: some View {
+        HStack(spacing: 16) {
+            metric("Found", manager.sessions.count)
+            metric("Imported", manager.importedCount)
+            if manager.isDiscovering {
                 HStack(spacing: 6) {
-                    Text(session.id)
-                        .font(.callout.monospaced())
-                        .lineLimit(1).truncationMode(.middle)
-                    if let source = session.source { Badge(text: source, color: .cyan) }
+                    ProgressView().controlSize(.small)
+                    Text("discovering…").font(.caption).foregroundStyle(.secondary)
                 }
-                HStack(spacing: 8) {
-                    if let date = session.importedDate {
-                        Text(date.formatted(.relative(presentation: .named)))
-                    }
-                    if let messages = session.messageCount {
-                        Text("· \(messages) message\(messages == 1 ? "" : "s")")
-                    }
-                    if let written = session.itemsWritten {
-                        Text("· \(written) memor\(written == 1 ? "y" : "ies")")
-                    }
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                // A failure is the whole reason this row is interesting — show why.
-                if let error = session.lastError, session.didFail {
-                    Text(error)
-                        .font(.caption).foregroundStyle(.red)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+            } else if manager.hasActiveImports {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("importing…").font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()
+            if let result = manager.lastResult {
+                Label(result, systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            Button {
+                Task { await manager.discover() }
+            } label: {
+                Label("Rescan", systemImage: "arrow.clockwise")
+            }
+            .disabled(manager.isDiscovering)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
-    // MARK: - Helpers
-
-    @ViewBuilder
-    private func errorRow(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-            Text(message)
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+    private func metric(_ label: String, _ value: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(label.uppercased()).font(.caption2).foregroundStyle(.secondary)
+            Text("\(value)").font(.callout.weight(.semibold)).monospacedDigit()
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
-    private func pickTranscript() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        // Session logs are JSONL; the system has no UTType for that, so accept
-        // any file and let the server reject what it can't parse.
-        panel.allowedContentTypes = [.data]
-        panel.showsHiddenFiles = true
-        panel.message = "Select a session transcript (JSONL)"
-        panel.prompt = "Import"
-        // Start where Claude Code keeps its transcripts, which is hidden.
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
-        if panel.runModal() == .OK, let url = panel.url {
-            importer.importFile(at: url.path)
+    // MARK: - Session list
+
+    @ViewBuilder
+    private var sessionList: some View {
+        if let error = manager.discoverError {
+            EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't discover sessions", message: error)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if manager.sessions.isEmpty && manager.isDiscovering {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Discovering sessions…").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if manager.sessions.isEmpty {
+            EmptyStateView(icon: "tray", title: "No sessions found",
+                           message: "No Claude Code, OpenCode, or Zed sessions were found on this machine.")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(selection: $selection) {
+                ForEach(manager.sessions) { session in
+                    SessionRow(session: session, status: manager.status(for: session))
+                        .tag(session.id)
+                        .contextMenu {
+                            importButtons(for: session)
+                        }
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Transcript pane
+
+    @ViewBuilder
+    private var transcriptPane: some View {
+        if let session = selectedSession {
+            SessionTranscriptPane(session: session) {
+                importControls(for: session)
+            }
+            .id(session.id)
+        } else {
+            EmptyStateView(icon: "text.bubble", title: "No session selected",
+                           message: "Pick a session to preview its transcript.")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Import controls
+
+    @ViewBuilder
+    private func importControls(for session: DiscoveredSessionDTO) -> some View {
+        let status = manager.status(for: session)
+        switch status {
+        case .queued:
+            Label("Queued…", systemImage: "clock").foregroundStyle(.yellow)
+        case .importing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Importing…").foregroundStyle(.secondary)
+            }
+        case .done, .alreadyImported:
+            HStack(spacing: 8) {
+                Label(status == .done ? "Imported" : "Already imported", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Button("Re-import") { manager.startImport(session, force: true) }
+                    .controlSize(.small)
+            }
+        case .failed:
+            HStack(spacing: 8) {
+                Label("Failed", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                Button("Retry") { manager.startImport(session, force: true) }
+                    .controlSize(.small)
+            }
+        case nil:
+            Button {
+                manager.startImport(session)
+            } label: {
+                Label("Import", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    @ViewBuilder
+    private func importButtons(for session: DiscoveredSessionDTO) -> some View {
+        let status = manager.status(for: session)
+        if status == .done || status == .alreadyImported || status == .failed {
+            Button("Re-import") { manager.startImport(session, force: true) }
+        } else if status == nil {
+            Button("Import") { manager.startImport(session) }
+        }
+    }
+}
+
+// MARK: - Session row
+
+/// One list row: status marker, source badge, relative time, token estimate,
+/// and title — the same columns the import TUI shows.
+private struct SessionRow: View {
+    let session: DiscoveredSessionDTO
+    let status: SessionImportState?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            statusMarker
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1).truncationMode(.tail)
+                HStack(spacing: 8) {
+                    Badge(text: session.source, color: sourceColor)
+                    Text(SessionFormat.relativeTime(session.updatedAt))
+                        .font(.caption2).foregroundStyle(.secondary)
+                    if session.approxTokens > 0 {
+                        Text(SessionFormat.tokens(session.approxTokens))
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.orange)
+                    }
+                    if session.messageCount > 0 {
+                        Text("\(session.messageCount) msg")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private var statusMarker: some View {
+        switch status {
+        case .alreadyImported, .done:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .queued:
+            Image(systemName: "clock.fill").foregroundStyle(.yellow)
+        case .importing:
+            ProgressView().controlSize(.small)
+        case .failed:
+            Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+        case nil:
+            Image(systemName: "circle").foregroundStyle(.tertiary)
+        }
+    }
+
+    private var sourceColor: Color {
+        switch session.source {
+        case "claude":   return .purple
+        case "opencode": return .green
+        case "zed":      return .blue
+        default:         return .secondary
+        }
+    }
+}
+
+// MARK: - Transcript pane
+
+/// The highlighted session's full transcript, loaded lazily and rendered per
+/// turn (role header + Markdown body), with the import controls pinned above.
+private struct SessionTranscriptPane<Controls: View>: View {
+    let session: DiscoveredSessionDTO
+    @ViewBuilder var controls: Controls
+
+    @Environment(AppState.self) private var state
+    @State private var transcript: SessionTranscriptDTO?
+    @State private var isLoading = false
+    @State private var error: String?
+
+    private var manager: MemoryManager { state.memoryManager }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Title + import controls.
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(session.title).font(.headline).lineLimit(2)
+                    if let cwd = session.cwd {
+                        Text(cwd).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                Spacer()
+                controls
+            }
+            .padding(12)
+            Divider()
+            transcriptBody
+        }
+        .task(id: session.id) { await load() }
+    }
+
+    @ViewBuilder
+    private var transcriptBody: some View {
+        if isLoading {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text("Loading transcript…").font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error {
+            EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load transcript", message: error)
+        } else if let transcript, !transcript.messages.isEmpty {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(transcript.messages) { message in
+                        TranscriptTurn(message: message)
+                    }
+                }
+                .padding(16)
+            }
+        } else {
+            EmptyStateView(icon: "text.bubble", title: "Empty transcript", message: "This session has no textual content.")
+        }
+    }
+
+    private func load() async {
+        isLoading = true; error = nil; transcript = nil
+        do {
+            transcript = try await manager.makeClient()
+                .sessionTranscript(source: session.source, id: session.sessionID)
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+/// One conversation turn: a coloured role header then the Markdown body.
+private struct TranscriptTurn: View {
+    let message: SessionMessageDTO
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(roleLabel, systemImage: roleIcon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(roleColor)
+            if message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("(no textual content)").font(.callout).foregroundStyle(.tertiary)
+            } else {
+                MarkdownText(message.content)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var roleLabel: String {
+        switch message.role {
+        case "user":      return "User"
+        case "assistant": return "Assistant"
+        case "system":    return "System"
+        case "tool":      return "Tool"
+        default:          return message.role.capitalized
+        }
+    }
+    private var roleIcon: String {
+        switch message.role {
+        case "user":      return "person.fill"
+        case "assistant": return "sparkles"
+        case "system":    return "gearshape.fill"
+        case "tool":      return "wrench.and.screwdriver.fill"
+        default:          return "bubble.left.fill"
+        }
+    }
+    private var roleColor: Color {
+        switch message.role {
+        case "user":      return .cyan
+        case "assistant": return .green
+        default:          return .orange
+        }
+    }
+}
+
+// MARK: - Formatting
+
+enum SessionFormat {
+    /// A compact "N ago" label from a Unix timestamp (seconds).
+    static func relativeTime(_ then: Int) -> String {
+        let now = Int(Date().timeIntervalSince1970)
+        let d = max(0, now - then)
+        switch d {
+        case ..<60:            return "just now"
+        case ..<3600:          return "\(d / 60)m ago"
+        case ..<86400:         return "\(d / 3600)h ago"
+        case ..<(86400 * 30):  return "\(d / 86400)d ago"
+        case ..<(86400 * 365): return "\(d / (86400 * 30))mo ago"
+        default:               return "\(d / (86400 * 365))y ago"
+        }
+    }
+
+    /// Compact token estimate: `~450`, `~1.2k`, `~48k`, `~1.5M`.
+    static func tokens(_ n: Int) -> String {
+        switch n {
+        case 0:              return ""
+        case ..<1_000:       return "~\(n)"
+        case ..<10_000:      return String(format: "~%.1fk", Double(n) / 1_000)
+        case ..<1_000_000:   return "~\(n / 1_000)k"
+        default:             return String(format: "~%.1fM", Double(n) / 1_000_000)
         }
     }
 }

@@ -380,25 +380,245 @@ struct MemoryAddResourceResponse: Codable, Equatable {
     }
 }
 
-struct MemoryDreamRequest: Codable {
-    var idleMinutes: Int?
-    enum CodingKeys: String, CodingKey { case idleMinutes = "idle_minutes" }
+// MARK: - LLM endpoints (memory-rs's own config, separate from codesearch's)
+
+/// Which resolution slot an endpoint is bound to. memory-rs resolves chat and
+/// embeddings **independently**, so a remote chat model can pair with local
+/// embeddings; `shared` is the default used by whichever role has no override.
+nonisolated enum LlmRole: String, Codable, CaseIterable, Identifiable {
+    case shared, chat, embedding
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .shared:    return "Default"
+        case .chat:      return "Chat"
+        case .embedding: return "Embeddings"
+        }
+    }
+    var help: String {
+        switch self {
+        case .shared:    return "Used by whichever role has no endpoint of its own."
+        case .chat:      return "Extraction, summarization and dreaming."
+        case .embedding: return "Semantic recall."
+        }
+    }
 }
 
-struct MemoryDreamResponse: Codable, Equatable {
-    var sessionsEligible: Int
-    var sessionsImported: Int
-    var sessionsFailed: Int
-    var clustersFound: Int
-    var operationsApplied: Int
-    var operationsSkipped: Int
+/// One registered endpoint. The API never echoes the key — `hasApiKey` says
+/// only whether one is stored.
+nonisolated struct MemoryLlmEndpoint: Codable, Equatable, Identifiable {
+    var name: String
+    var baseUrl: String
+    var model: String?
+    var embeddingModel: String?
+    var hasApiKey: Bool
+    var id: String { name }
 
     enum CodingKeys: String, CodingKey {
-        case sessionsEligible = "sessions_eligible"
-        case sessionsImported = "sessions_imported"
-        case sessionsFailed = "sessions_failed"
-        case clustersFound = "clusters_found"
-        case operationsApplied = "operations_applied"
-        case operationsSkipped = "operations_skipped"
+        case name, model
+        case baseUrl = "base_url"
+        case embeddingModel = "embedding_model"
+        case hasApiKey = "has_api_key"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name           = c.lenient(String.self, .name, or: "")
+        baseUrl        = c.lenient(String.self, .baseUrl, or: "")
+        model          = try? c.decode(String.self, forKey: .model)
+        embeddingModel = try? c.decode(String.self, forKey: .embeddingModel)
+        hasApiKey      = c.lenient(Bool.self, .hasApiKey, or: false)
+    }
+}
+
+/// The embedding model + dimension the database is pinned to on first open.
+/// Switching to a model of a different width is rejected at open time, so the
+/// UI warns before the user strands their store.
+nonisolated struct MemoryPinnedEmbedding: Codable, Equatable {
+    var model: String
+    var dimensions: Int
+}
+
+/// Copilot's state, reported alongside the registered endpoints. Copilot isn't
+/// a registered endpoint — its URL, headers and credential are fixed — so it's
+/// bound by the reserved name `copilot` in the same active-role slot.
+nonisolated struct MemoryCopilotState: Codable, Equatable {
+    var endpointName: String
+    var authenticated: Bool
+    var model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case endpointName = "endpoint_name"
+        case authenticated, model
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        endpointName  = c.lenient(String.self, .endpointName, or: "copilot")
+        authenticated = c.lenient(Bool.self, .authenticated, or: false)
+        model         = try? c.decode(String.self, forKey: .model)
+    }
+}
+
+/// `GET /api/llm/endpoints` — the whole LLM configuration.
+nonisolated struct MemoryLlmConfig: Codable, Equatable {
+    var endpoints: [MemoryLlmEndpoint]
+    var active: String?
+    var activeChat: String?
+    var activeEmbedding: String?
+    var pinnedEmbedding: MemoryPinnedEmbedding?
+    var copilot: MemoryCopilotState?
+
+    /// The reserved endpoint name that selects the Copilot backend.
+    static let copilotEndpointName = "copilot"
+
+    enum CodingKeys: String, CodingKey {
+        case endpoints, active, copilot
+        case activeChat = "active_chat"
+        case activeEmbedding = "active_embedding"
+        case pinnedEmbedding = "pinned_embedding"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        endpoints       = c.lenient([MemoryLlmEndpoint].self, .endpoints, or: [])
+        active          = try? c.decode(String.self, forKey: .active)
+        activeChat      = try? c.decode(String.self, forKey: .activeChat)
+        activeEmbedding = try? c.decode(String.self, forKey: .activeEmbedding)
+        pinnedEmbedding = try? c.decode(MemoryPinnedEmbedding.self, forKey: .pinnedEmbedding)
+        copilot         = try? c.decode(MemoryCopilotState.self, forKey: .copilot)
+    }
+
+    /// Whether Copilot is the chat backend right now.
+    var copilotIsChatBackend: Bool {
+        resolved(.chat) == Self.copilotEndpointName
+    }
+
+    /// The endpoint bound to `role`, resolving chat/embedding through the
+    /// shared default the way the server does.
+    func resolved(_ role: LlmRole) -> String? {
+        switch role {
+        case .shared:    return active
+        case .chat:      return activeChat ?? active
+        case .embedding: return activeEmbedding ?? active
+        }
+    }
+
+    /// Whether `role` names its own endpoint rather than inheriting `active`.
+    func isExplicit(_ role: LlmRole) -> Bool {
+        switch role {
+        case .shared:    return active != nil
+        case .chat:      return activeChat != nil
+        case .embedding: return activeEmbedding != nil
+        }
+    }
+}
+
+/// Body for `PUT /api/llm/endpoints/{name}`.
+nonisolated struct MemoryLlmUpsertRequest: Codable {
+    /// Omitted for the reserved `copilot` name, whose URL the provider fixes.
+    var baseUrl: String?
+    var model: String?
+    var embeddingModel: String?
+    /// Omit to keep an existing key; send `""` to clear it.
+    var apiKey: String?
+    var setActive: LlmRole?
+
+    enum CodingKeys: String, CodingKey {
+        case baseUrl = "base_url"
+        case model
+        case embeddingModel = "embedding_model"
+        case apiKey = "api_key"
+        case setActive = "set_active"
+    }
+}
+
+/// Body for `POST /api/llm/active`.
+nonisolated struct MemoryLlmSetActiveRequest: Codable {
+    /// `nil` clears the role back to the shared default.
+    var name: String?
+    var role: LlmRole
+}
+
+nonisolated struct MemoryLlmModel: Codable, Equatable, Identifiable {
+    var id: String
+    var vendor: String?
+}
+
+nonisolated struct MemoryLlmModelsResponse: Codable, Equatable {
+    var baseUrl: String
+    var models: [MemoryLlmModel]
+
+    enum CodingKeys: String, CodingKey {
+        case baseUrl = "base_url"
+        case models
+    }
+}
+
+// MARK: - Dream (memory consolidation) config + status
+
+/// `GET /api/dream` — the dream scheduler's config, whether a cycle is running,
+/// and the last recorded run. Config fields double as the editable dream
+/// settings (written back via `PUT /api/dream/config`).
+nonisolated struct DreamStatus: Codable, Equatable {
+    var enabled: Bool
+    var intervalHours: Int
+    var sessionIdleMinutes: Int
+    var autoImport: Bool
+    var running: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, running
+        case intervalHours = "interval_hours"
+        case sessionIdleMinutes = "session_idle_minutes"
+        case autoImport = "auto_import"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled            = c.lenient(Bool.self, .enabled, or: true)
+        intervalHours      = c.lenient(Int.self, .intervalHours, or: 4)
+        sessionIdleMinutes = c.lenient(Int.self, .sessionIdleMinutes, or: 60)
+        autoImport         = c.lenient(Bool.self, .autoImport, or: true)
+        running            = c.lenient(Bool.self, .running, or: false)
+    }
+}
+
+/// Body for `PUT /api/dream/config` — a partial update. Every field is optional
+/// so changing one setting leaves the rest untouched server-side.
+nonisolated struct DreamConfigRequest: Codable {
+    var dreamEnabled: Bool?
+    var dreamIntervalHours: Int?
+    var sessionIdleMinutes: Int?
+    var autoImport: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case dreamEnabled = "dream_enabled"
+        case dreamIntervalHours = "dream_interval_hours"
+        case sessionIdleMinutes = "session_idle_minutes"
+        case autoImport = "auto_import"
+    }
+}
+
+/// `PUT /api/dream/config` response — the merged effective config.
+nonisolated struct DreamConfigResponse: Codable, Equatable {
+    var dreamEnabled: Bool
+    var dreamIntervalHours: Int
+    var sessionIdleMinutes: Int
+    var autoImport: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case dreamEnabled = "dream_enabled"
+        case dreamIntervalHours = "dream_interval_hours"
+        case sessionIdleMinutes = "session_idle_minutes"
+        case autoImport = "auto_import"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dreamEnabled       = c.lenient(Bool.self, .dreamEnabled, or: true)
+        dreamIntervalHours = c.lenient(Int.self, .dreamIntervalHours, or: 4)
+        sessionIdleMinutes = c.lenient(Int.self, .sessionIdleMinutes, or: 60)
+        autoImport         = c.lenient(Bool.self, .autoImport, or: true)
     }
 }
