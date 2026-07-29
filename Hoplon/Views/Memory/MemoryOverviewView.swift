@@ -38,10 +38,21 @@ struct MemoryOverviewView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader("Store")
             HStack(spacing: 12) {
-                MetricCard(title: "Memories", value: metric(manager.stats?.totalItems),
+                MetricCard(title: "Memories", value: metric(manager.stats?.totalMemories),
                            color: .indigo, systemImage: "brain")
+                MetricCard(title: "Entities", value: metric(manager.stats?.totalEntities),
+                           color: .teal, systemImage: "at")
+                MetricCard(title: "Links", value: metric(manager.stats?.totalEdges),
+                           color: .purple, systemImage: "link")
                 MetricCard(title: "Sessions", value: metric(manager.stats?.totalSessions),
                            color: .cyan, systemImage: "bubble.left.and.text.bubble.right")
+            }
+            HStack(spacing: 12) {
+                MetricCard(title: "Conflicts", value: Format.count(manager.conflictCount),
+                           color: manager.conflictCount > 0 ? .orange : .secondary,
+                           systemImage: "exclamationmark.triangle")
+                MetricCard(title: "History", value: metric(manager.stats?.historyCount),
+                           color: .secondary, systemImage: "clock.arrow.circlepath")
                 MetricCard(title: "Nodes", value: metric(manager.stats?.totalNodes),
                            color: .orange, systemImage: "point.3.filled.connected.trianglepath.dotted")
                 MetricCard(title: "Namespaces", value: Format.count(manager.namespaces.count),
@@ -49,7 +60,7 @@ struct MemoryOverviewView: View {
             }
 
             // Per-kind breakdown, when the store has anything in it.
-            if let byKind = manager.stats?.itemsByKind, !byKind.isEmpty {
+            if let byKind = manager.stats?.memoriesByKind, !byKind.isEmpty {
                 CardContainer {
                     VStack(spacing: 0) {
                         ForEach(Array(byKind.enumerated()), id: \.offset) { idx, entry in

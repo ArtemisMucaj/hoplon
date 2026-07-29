@@ -151,6 +151,7 @@ struct SessionImportView: View {
                     .foregroundStyle(.green)
                 Button("Re-import") { manager.startImport(session, force: true) }
                     .controlSize(.small)
+                    .help("Discards the memories this session already wrote, then extracts them again. The one destructive action in the store — everything else only ever appends.")
             }
         case .failed:
             HStack(spacing: 8) {
@@ -173,6 +174,7 @@ struct SessionImportView: View {
         let status = manager.status(for: session)
         if status == .done || status == .alreadyImported || status == .failed {
             Button("Re-import") { manager.startImport(session, force: true) }
+                .help("Discards the memories this session already wrote, then extracts them again. The one destructive action in the store — everything else only ever appends.")
         } else if status == nil {
             Button("Import") { manager.startImport(session) }
         }

@@ -22,7 +22,7 @@ struct NamespaceDetailView: View {
     @State private var actionError: String?
 
     @State private var query = ""
-    @State private var results: [MemoryItem] = []
+    @State private var results: [Memory] = []
     @State private var searchNote: String?
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>?
@@ -172,25 +172,38 @@ struct NamespaceDetailView: View {
     }
 
     @ViewBuilder
-    private func resultRow(_ item: MemoryItem) -> some View {
+    private func resultRow(_ memory: Memory) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                if let kind = item.kind { Badge(text: kind, color: .indigo) }
-                Text(item.name ?? "(memory)").font(.callout.weight(.medium))
+                if let kind = memory.kind { Badge(text: kind, color: .indigo) }
+                Text(memory.title).font(.callout.weight(.medium))
+                    .help(memory.statement ?? "")
                 Spacer()
-                if let score = item.score {
+                if let score = memory.score {
                     Text(String(format: "%.2f", score))
                         .font(.caption2.monospacedDigit()).foregroundStyle(.green)
                 }
             }
-            if let project = item.project {
-                Text(project).font(.caption2).foregroundStyle(.tertiary)
-            }
-            if let body = item.body, !body.isEmpty {
-                Text(body)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                if let project = memory.project {
+                    Text(project).font(.caption2).foregroundStyle(.tertiary)
+                }
+                // Recall carries a compact provenance; surfacing it here is what
+                // stops a contested answer looking like a settled one.
+                if let p = memory.provenance {
+                    if p.supersedesCount > 0 {
+                        Text("replaced \(p.supersedesCount)\(p.chainTruncated ? "+" : "")")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    if p.corroborations > 0 {
+                        Text("corroborated \(p.corroborations)×")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    if p.isContested {
+                        Label("contested", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)

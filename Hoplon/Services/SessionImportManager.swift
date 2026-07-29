@@ -34,6 +34,15 @@ final class SessionImportManager {
     /// queued → importing → done transitions feel live.
     private let pollInterval: Duration = .milliseconds(1500)
 
+    /// Called once each time a session finishes importing.
+    ///
+    /// An import is the only thing that changes the store from inside the app,
+    /// and the browse tree is cached deliberately (so navigating away and back
+    /// does not refetch). Without this the two disagree until something else
+    /// forces a reload — which is why a freshly imported session appeared only
+    /// after restarting the server.
+    @ObservationIgnored var onImportCompleted: (() -> Void)?
+
     init(clientProvider: @escaping () -> MemoryClient) {
         self.clientProvider = clientProvider
     }
@@ -163,12 +172,20 @@ final class SessionImportManager {
     /// terminal statuses flow through normally — so a genuinely-finished import
     /// is never stuck.
     private func mergeStatuses(_ entries: [SessionImportStatusDTO]) {
+        var completedNow = false
         for entry in entries {
             if statuses[entry.id]?.status == .queued,
                entry.status == .done || entry.status == .failed || entry.status == .alreadyImported {
                 continue
             }
+            // Fire on the *transition* into `.done`, not on the state. Polling
+            // sees `.done` on every tick afterwards, and refreshing the tree
+            // every two seconds would undo the point of caching it.
+            if entry.status == .done, statuses[entry.id]?.status != .done {
+                completedNow = true
+            }
             statuses[entry.id] = entry
         }
+        if completedNow { onImportCompleted?() }
     }
 }

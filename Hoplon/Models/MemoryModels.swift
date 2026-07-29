@@ -94,9 +94,18 @@ extension RawJSONBacked {
 
 // MARK: - Memory items / nodes / sessions
 
-struct MemoryItem: Codable, Identifiable, RawJSONBacked {
+/// One memory: an atomic subject–predicate–object statement in the append-only
+/// graph memory-rs stores.
+///
+/// Still raw-JSON-backed. That is what has let this app survive every server
+/// reshape so far — a field it does not know about is carried through, and a
+/// field that disappears degrades one accessor instead of failing the decode.
+/// The strictness lives on the *envelope* (`MemoriesResponse`), where a missing
+/// key means the binary is the wrong version and silence would be worse than a
+/// thrown error.
+struct Memory: Codable, Identifiable, RawJSONBacked {
     let raw: [String: JSONValue]
-    /// Stable identity for items without a recognized identifier — a fresh
+    /// Stable identity for memories without a recognized identifier — a fresh
     /// UUID per `id` read would make SwiftUI replace the row on every diff.
     private let fallbackID = UUID().uuidString
     init(from decoder: Decoder) throws {
@@ -107,12 +116,195 @@ struct MemoryItem: Codable, Identifiable, RawJSONBacked {
         var c = encoder.singleValueContainer()
         try c.encode(raw)
     }
-    var id: String { string("id", "uuid", "name") ?? fallbackID }
+    var id: String { string("id", "uuid") ?? fallbackID }
     var kind: String? { string("kind", "type") }
-    var name: String? { string("name", "title") }
-    var body: String? { string("content", "text", "summary", "value", "description") }
+
+    /// The human-readable rendering of the triple. A memory has no *name* — its
+    /// identity is its id — so this is the only thing to put in a row.
+    var statement: String? { string("statement") }
     var project: String? { string("project") }
     var score: Double? { raw["score"]?.doubleValue }
+
+    var status: MemoryStatus { MemoryStatus(rawValue: string("status") ?? "") ?? .active }
+    var sourceKind: MemorySourceKind {
+        MemorySourceKind(rawValue: string("source_kind") ?? "") ?? .assistantInferred
+    }
+    var confidence: Double? { raw["confidence"]?.doubleValue }
+    var recordedAt: Int? { int("recorded_at") }
+    var validTo: Int? { int("valid_to") }
+    var sourceSessionID: String? { string("source_session_id") }
+    /// True when consolidation produced it rather than a session.
+    var derived: Bool { raw["derived"]?.boolValue ?? false }
+
+    var predicate: String? { string("predicate") }
+    /// The server resolves entity ids to their canonical name and sends it as
+    /// `subject_label`; the raw `subject` is kept for clients that want to
+    /// follow the graph. Fall back to the raw form for older binaries.
+    var subject: String? { string("subject_label") ?? Self.entityRef(raw["subject"]) }
+    var object: String? { string("object_label") ?? Self.entityRef(raw["object"]) }
+
+    /// The row title: the whole triple, read as `subject · predicate · object`.
+    ///
+    /// Not the statement — that is a self-contained sentence by design, and
+    /// four of them down a list read as a wall of prose. Not just
+    /// subject+predicate either: dropping the object made two memories about
+    /// one subject render identically, and left the row looking truncated
+    /// rather than deliberately short. The triple is the memory's identity, so
+    /// it is also the thing that distinguishes one row from the next.
+    var title: String {
+        guard let subject, !subject.isEmpty else { return statement ?? id }
+        guard let predicate, !predicate.isEmpty else { return subject }
+        guard let object, !object.isEmpty else { return "\(subject) · \(predicate)" }
+        return "\(subject) · \(predicate) · \(object)"
+    }
+
+    /// The triple, for the detail pane. Shown because it is what deduplication
+    /// and entity resolution key on: when two memories read alike, this is
+    /// where the difference is.
+    var triple: String? {
+        guard let p = predicate else { return nil }
+        return "\(subject ?? "?") — \(p) → \(object ?? "?")"
+    }
+
+    /// `{"type":"entity","value":"…"}` / `{"type":"literal","value":"…"}`.
+    /// A resolved entity is prefixed so it reads differently from a literal.
+    private static func entityRef(_ v: JSONValue?) -> String? {
+        guard let value = v?["value"]?.stringValue else { return nil }
+        if v?["type"]?.stringValue == "entity" { return "@" + value }
+        return value.isEmpty ? nil : value
+    }
+
+    /// Compact provenance attached to a *search* result. Absent on plain lists.
+    var provenance: MemoryProvenance? {
+        guard let p = raw["provenance"] else { return nil }
+        return MemoryProvenance(p)
+    }
+}
+
+/// Lifecycle state. There is deliberately no "unresolved conflict" state:
+/// contradicting memories both stay `active` and both keep answering, with the
+/// disagreement reported alongside them.
+nonisolated enum MemoryStatus: String, Codable, CaseIterable, Identifiable {
+    case active, superseded, retracted
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+}
+
+/// Where a memory came from. Ingestion does not use this to arbitrate — it is
+/// context for the reader, and an input to consolidation.
+nonisolated enum MemorySourceKind: String, Codable, CaseIterable, Identifiable {
+    case userStated = "user_stated"
+    case assistantInferred = "assistant_inferred"
+    case derived
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .userStated: return "You said this"
+        case .assistantInferred: return "Inferred"
+        case .derived: return "Consolidated"
+        }
+    }
+}
+
+/// The typed relationship between two memories.
+nonisolated enum MemoryEdgeType: String, Codable {
+    case supersedes, contradicts, refines, retracts, corroborates
+    case relatesTo = "relates_to"
+
+    /// Phrased from the point of view of the memory being displayed. Direction
+    /// is spelled out because "supersedes X" and "superseded by X" are opposite
+    /// facts about it.
+    func phrase(outgoing: Bool) -> String {
+        switch (self, outgoing) {
+        case (.supersedes, true): return "supersedes"
+        case (.supersedes, false): return "superseded by"
+        case (.contradicts, _): return "contradicts"
+        case (.refines, true): return "refines"
+        case (.refines, false): return "refined by"
+        case (.corroborates, true): return "corroborates"
+        case (.corroborates, false): return "corroborated by"
+        case (.retracts, true): return "retracts"
+        case (.retracts, false): return "retracted by"
+        case (.relatesTo, _): return "relates to"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .supersedes: return "arrow.up.forward"
+        case .contradicts: return "exclamationmark.triangle"
+        case .corroborates: return "checkmark.seal"
+        case .refines: return "scope"
+        case .retracts: return "xmark.circle"
+        case .relatesTo: return "link"
+        }
+    }
+}
+
+/// One typed edge, as returned beside a memory by `GET /api/memory/{id}`.
+nonisolated struct MemoryEdgeDTO: Codable, Identifiable, Equatable {
+    var fromMemory: String
+    var toMemory: String
+    var edgeType: String
+    var createdAt: Int
+    var createdBy: String
+    var id: String { "\(fromMemory)|\(toMemory)|\(edgeType)" }
+
+    enum CodingKeys: String, CodingKey {
+        case fromMemory = "from_memory"
+        case toMemory = "to_memory"
+        case edgeType = "edge_type"
+        case createdAt = "created_at"
+        case createdBy = "created_by"
+    }
+
+    var type: MemoryEdgeType? { MemoryEdgeType(rawValue: edgeType) }
+    /// Whether `subject` is this edge's source, which decides the phrasing.
+    func outgoing(from subject: String) -> Bool { fromMemory == subject }
+    func other(than subject: String) -> String { fromMemory == subject ? toMemory : fromMemory }
+}
+
+/// Why a search hit is the answer — the compact form carried on every result.
+struct MemoryProvenance: Equatable {
+    var supersedesCount: Int
+    var chainTruncated: Bool
+    var corroborations: Int
+    var contradictedBy: [MemoryRefDTO]
+    var refinementsCount: Int
+
+    init?(_ v: JSONValue) {
+        supersedesCount = v["supersedes_count"]?.intValue ?? 0
+        chainTruncated = v["chain_truncated"]?.boolValue ?? false
+        corroborations = v["corroborations"]?.intValue ?? 0
+        refinementsCount = v["refinements_count"]?.intValue ?? 0
+        if case .array(let items)? = v["contradicted_by"] {
+            // Written out rather than `compactMap(MemoryRefDTO.init)`: passing
+            // the initializer as a value crosses the actor boundary, which the
+            // closure form does not.
+            contradictedBy = items.compactMap { MemoryRefDTO($0) }
+        } else {
+            contradictedBy = []
+        }
+        if supersedesCount == 0 && corroborations == 0
+            && refinementsCount == 0 && contradictedBy.isEmpty { return nil }
+    }
+
+    /// A live disagreement is the one thing here worth interrupting for.
+    var isContested: Bool { !contradictedBy.isEmpty }
+}
+
+/// A memory referenced from another memory's provenance.
+struct MemoryRefDTO: Identifiable, Equatable {
+    var id: String
+    var statement: String
+    var recordedAt: Int?
+
+    init?(_ v: JSONValue) {
+        guard let id = v["id"]?.stringValue else { return nil }
+        self.id = id
+        statement = v["statement"]?.stringValue ?? id
+        recordedAt = v["recorded_at"]?.intValue
+    }
 }
 
 struct MemoryNode: Codable, Identifiable, RawJSONBacked {
@@ -202,54 +394,148 @@ struct MemoryNode: Codable, Identifiable, RawJSONBacked {
 //
 // memory-rs returns bare `{"<key>": [...]}` objects with no count field.
 
-struct MemoryListResponse: Codable { var items: [MemoryItem] }
+/// `GET /api/memory` — `{"memories": [...]}`.
+///
+/// The `memories` key is **required**, deliberately. Memory objects themselves
+/// are lenient, which means a renamed field degrades quietly; that leniency is
+/// wrong at the envelope. A new app pointed at an old binary still serving
+/// `{"items": …}` must fail with an error the UI can show, not decode to an
+/// empty array and render a convincing "no memories yet".
+struct MemoriesResponse: Codable { var memories: [Memory] }
+
 struct MemorySearchResponse: Codable {
-    var results: [MemoryItem]
+    var results: [Memory]
     /// Set when a namespace scope matched no member projects.
     var note: String?
 }
 struct MemoryTreeResponse: Codable { var nodes: [MemoryNode] }
 
-/// `GET /api/memory/{id}` — a tagged union over node / item / ambiguous.
+/// `GET /api/memory/{id}` — a tagged union over memory / node.
+///
+/// A memory always comes back with its edges: anyone holding an id wants the
+/// neighbourhood too, and making that a second round-trip guarantees callers
+/// skip it.
 struct MemoryShowResponse: Codable {
     var type: String
     var node: MemoryNode?
-    var item: MemoryItem?
-    var matches: [MemoryItem]?
+    var memory: Memory?
+    var edges: [MemoryEdgeDTO]?
+}
+
+/// `DELETE /api/memory/{id}` — nothing is deleted; the memory is retracted and
+/// stays in the log for provenance.
+nonisolated struct MemoryRetractResponse: Codable { var retracted: Bool }
+
+/// `GET /api/conflicts` — pairs of memories that contradict each other and are
+/// both still current. Derived from the edges, not a stored status, so a pair
+/// leaves this list on its own once consolidation reconciles it.
+struct MemoryConflict: Codable, Identifiable {
+    var a: Memory
+    var b: Memory
+    var recordedAt: Int?
+    var id: String { "\(a.id)|\(b.id)" }
+
+    enum CodingKeys: String, CodingKey {
+        case a, b
+        case recordedAt = "recorded_at"
+    }
+}
+struct MemoryConflictsResponse: Codable { var conflicts: [MemoryConflict] }
+
+/// A resolved entity — the anchor memories hang off. Two memories about the
+/// same thing share one of these, which is what makes the store a graph rather
+/// than a list.
+nonisolated struct MemoryEntity: Codable, Identifiable, Equatable {
+    var id: String
+    var canonicalName: String
+    var entityType: String
+    /// Every name this entity answers to, canonical included — it is the
+    /// lookup index, not decoration. A list longer than one means attribution
+    /// has learned a variant; a common entity stuck at one means variants are
+    /// still fragmenting into separate anchors.
+    var names: [String]
+    var memoryCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case canonicalName = "canonical_name"
+        case entityType = "entity_type"
+        case names
+        case memoryCount = "memory_count"
+    }
+
+    var icon: String {
+        switch entityType {
+        case "person": return "person"
+        case "project": return "shippingbox"
+        case "tool": return "wrench.and.screwdriver"
+        case "place": return "mappin"
+        case "organization": return "building.2"
+        case "concept": return "lightbulb"
+        default: return "questionmark.circle"
+        }
+    }
+}
+
+struct MemoryEntitiesResponse: Codable { var entities: [MemoryEntity] }
+
+/// `GET /api/entities/{id}` — the entity plus what references it.
+struct MemoryEntityDetail: Codable {
+    var entity: MemoryEntity
+    var memories: [Memory]
 }
 
 // MARK: - Stats
 
 struct MemoryStats: Codable, Equatable {
-    var totalItems: Int
+    var totalMemories: Int
     var totalSessions: Int
     var totalNodes: Int
+    var totalEntities: Int
+    var totalEdges: Int
     /// `[(kind, count)]` — the server sends an array of 2-element arrays.
-    var itemsByKind: [(String, Int)]
+    var memoriesByKind: [(String, Int)]
+    /// `[(status, count)]`. Everything outside `active` is history: superseded
+    /// links in a chain, and retractions.
+    var memoriesByStatus: [(String, Int)]
     var dataDir: String?
 
     enum CodingKeys: String, CodingKey {
-        case totalItems = "total_items"
+        case totalMemories = "total_memories"
         case totalSessions = "total_sessions"
         case totalNodes = "total_nodes"
-        case itemsByKind = "items_by_kind"
+        case totalEntities = "total_entities"
+        case totalEdges = "total_edges"
+        case memoriesByKind = "memories_by_kind"
+        case memoriesByStatus = "memories_by_status"
         case dataDir = "data_dir"
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        totalItems    = (try? c.decode(Int.self, forKey: .totalItems)) ?? 0
+        totalMemories = (try? c.decode(Int.self, forKey: .totalMemories)) ?? 0
         totalSessions = (try? c.decode(Int.self, forKey: .totalSessions)) ?? 0
         totalNodes    = (try? c.decode(Int.self, forKey: .totalNodes)) ?? 0
+        totalEntities = (try? c.decode(Int.self, forKey: .totalEntities)) ?? 0
+        totalEdges    = (try? c.decode(Int.self, forKey: .totalEdges)) ?? 0
         dataDir       = try? c.decode(String.self, forKey: .dataDir)
-        itemsByKind   = Self.decodePairs(c, .itemsByKind)
+        memoriesByKind   = Self.decodePairs(c, .memoriesByKind)
+        memoriesByStatus = Self.decodePairs(c, .memoriesByStatus)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(totalItems, forKey: .totalItems)
+        try c.encode(totalMemories, forKey: .totalMemories)
         try c.encode(totalSessions, forKey: .totalSessions)
         try c.encode(totalNodes, forKey: .totalNodes)
+        try c.encode(totalEntities, forKey: .totalEntities)
+        try c.encode(totalEdges, forKey: .totalEdges)
+    }
+
+    /// How many memories are not current — the depth of the history behind the
+    /// answers, not a problem count.
+    var historyCount: Int {
+        memoriesByStatus.filter { $0.0 != MemoryStatus.active.rawValue }.reduce(0) { $0 + $1.1 }
     }
 
     /// Rust serializes `Vec<(String, u64)>` as `[["fact", 3], …]`.
@@ -263,10 +549,13 @@ struct MemoryStats: Codable, Equatable {
     }
 
     static func == (lhs: MemoryStats, rhs: MemoryStats) -> Bool {
-        lhs.totalItems == rhs.totalItems
+        lhs.totalMemories == rhs.totalMemories
             && lhs.totalSessions == rhs.totalSessions
             && lhs.totalNodes == rhs.totalNodes
-            && lhs.itemsByKind.elementsEqual(rhs.itemsByKind, by: ==)
+            && lhs.totalEntities == rhs.totalEntities
+            && lhs.totalEdges == rhs.totalEdges
+            && lhs.memoriesByKind.elementsEqual(rhs.memoriesByKind, by: ==)
+            && lhs.memoriesByStatus.elementsEqual(rhs.memoriesByStatus, by: ==)
     }
 }
 

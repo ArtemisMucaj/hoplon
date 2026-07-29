@@ -65,6 +65,20 @@ final class MemoryBrowseManager {
         Task { stats = try? await clientProvider().stats() }
     }
 
+    /// Mark the cache stale *without* clearing what is on screen.
+    ///
+    /// Distinct from [`reset`]: that one blanks the tree, which is right when
+    /// the service stops but wrong after an import — the user is usually
+    /// looking at the pane, and emptying it mid-glance reads as data loss. This
+    /// reloads in place if the browser is open, and otherwise leaves the next
+    /// visit to refetch.
+    func invalidate() {
+        hasLoaded = false
+        if !nodes.isEmpty || isLoading {
+            reload(query: loadedQuery, kind: loadedKind)
+        }
+    }
+
     /// Drop the cache (e.g. when the service stops) so the next visit reloads.
     func reset() {
         loadTask?.cancel()
@@ -117,11 +131,19 @@ final class MemoryBrowseManager {
         defer { if !Task.isCancelled { isLoading = false } }
         do {
             async let treeNodes = client.tree(uri: nil)
-            async let itemList = client.list(kind: kind)
+            async let memoryList = client.list(kind: kind)
             async let projectNodes = client.tree(uri: "memory://projects")
             async let resourceNodes = client.tree(uri: "memory://resources")
-            let (rawNodes, items, projects, resources) =
-                try await (treeNodes, itemList, projectNodes, resourceNodes)
+            // Conflicts are advisory: a server too old to serve the route must
+            // not take the whole tree down with it.
+            async let conflictList = try? client.conflicts()
+            // Advisory like conflicts: a binary predating /api/entities must not
+            // take the whole tree down.
+            async let entityList = try? client.entities()
+            let (rawNodes, memories, projects, resources) =
+                try await (treeNodes, memoryList, projectNodes, resourceNodes)
+            let conflicts = await conflictList ?? []
+            let entities = await entityList ?? []
             if Task.isCancelled { return }
 
             let digest = rawNodes.first { $0.kind == "memory" }
@@ -133,14 +155,27 @@ final class MemoryBrowseManager {
             // Memories: the group row IS the digest node, so selecting it shows
             // L0/L1 in the detail pane. Children are the per-kind subcategories.
             var memoryChildren: [MemoryTreeNode] = []
-            let byKind = Dictionary(grouping: items) { MemoryKind(rawValue: $0.kind ?? "") }
+            let byKind = Dictionary(grouping: memories) { MemoryKind(rawValue: $0.kind ?? "") }
             for kindCase in MemoryKind.allCases {
-                guard let kindItems = byKind[kindCase], !kindItems.isEmpty else { continue }
+                guard let kindMemories = byKind[kindCase], !kindMemories.isEmpty else { continue }
                 memoryChildren.append(MemoryTreeNode(
                     id: "kind:\(kindCase.rawValue)",
-                    display: .group(title: kindCase.label, icon: kindCase.icon, tint: .indigo, count: kindItems.count),
+                    display: .group(title: kindCase.label, icon: kindCase.icon, tint: .indigo, count: kindMemories.count),
                     row: MemoryTreeRow(id: "kind:\(kindCase.rawValue)", target: .group(title: kindCase.label), score: nil),
-                    children: kindItems.map { Self.itemNode($0) }
+                    children: kindMemories.map { Self.memoryNode($0) }
+                ))
+            }
+            // The `nil` bucket — a kind this build does not know. Grouping by an
+            // optional key silently discarded these, so a memory whose kind the
+            // server added later simply vanished from the browser with no hint
+            // that anything was missing. Show it instead.
+            if let unknown = byKind[nil], !unknown.isEmpty {
+                memoryChildren.append(MemoryTreeNode(
+                    id: "kind:other",
+                    display: .group(title: "Other", icon: "questionmark.folder",
+                                    tint: .secondary, count: unknown.count),
+                    row: MemoryTreeRow(id: "kind:other", target: .group(title: "Other"), score: nil),
+                    children: unknown.map { Self.memoryNode($0) }
                 ))
             }
             if digest != nil || !memoryChildren.isEmpty {
@@ -149,9 +184,35 @@ final class MemoryBrowseManager {
                 } ?? MemoryTreeRow(id: "group:memories", target: .group(title: "Memories"), score: nil)
                 groups.append(MemoryTreeNode(
                     id: "group:memories",
-                    display: .group(title: "Memories", icon: "brain", tint: .yellow, count: items.count),
+                    display: .group(title: "Memories", icon: "brain", tint: .yellow, count: memories.count),
                     row: memoryRow,
                     children: memoryChildren.isEmpty ? nil : memoryChildren
+                ))
+            }
+
+            // Conflicts — pairs that contradict each other, both still current.
+            // Placed right under Memories because it is the one group that wants
+            // a decision; without it the disagreements are invisible, since both
+            // sides also appear as ordinary memories above.
+            if !conflicts.isEmpty {
+                groups.append(MemoryTreeNode(
+                    id: "group:conflicts",
+                    display: .group(title: "Conflicts", icon: "exclamationmark.triangle",
+                                    tint: .orange, count: conflicts.count),
+                    row: MemoryTreeRow(id: "group:conflicts", target: .group(title: "Conflicts"), score: nil),
+                    children: conflicts.map(Self.conflictNode)
+                ))
+            }
+
+            // Entities — the anchors memories hang off. Placed after Conflicts
+            // because it is a structural view rather than something to act on,
+            // but before Projects because it is part of the memory graph.
+            if !entities.isEmpty {
+                groups.append(MemoryTreeNode(
+                    id: "group:entities",
+                    display: .group(title: "Entities", icon: "at", tint: .teal, count: entities.count),
+                    row: MemoryTreeRow(id: "group:entities", target: .group(title: "Entities"), score: nil),
+                    children: entities.map(Self.entityNode)
                 ))
             }
 
@@ -206,7 +267,7 @@ final class MemoryBrowseManager {
         do {
             let response = try await client.search(query: query, kind: kind)
             if Task.isCancelled { return }
-            nodes = response.results.map { Self.itemNode($0, score: $0.score) }
+            nodes = response.results.map { Self.memoryNode($0, score: $0.score) }
             hasLoaded = true
         } catch {
             if Task.isCancelled || Self.isCancellation(error) { return }
@@ -250,13 +311,31 @@ final class MemoryBrowseManager {
         )
     }
 
-    private static func itemNode(_ item: MemoryItem, score: Double? = nil) -> MemoryTreeNode {
+    private static func memoryNode(_ memory: Memory, score: Double? = nil) -> MemoryTreeNode {
         MemoryTreeNode(
-            id: "item:\(item.id)",
-            display: .item(item),
-            row: MemoryTreeRow(id: "item:\(item.id)", target: .item(item), score: score),
+            id: "memory:\(memory.id)",
+            display: .memory(memory),
+            row: MemoryTreeRow(id: "memory:\(memory.id)", target: .memory(memory), score: score),
             children: nil,
             score: score
+        )
+    }
+
+    private static func entityNode(_ entity: MemoryEntity) -> MemoryTreeNode {
+        MemoryTreeNode(
+            id: "entity:\(entity.id)",
+            display: .entity(entity),
+            row: MemoryTreeRow(id: "entity:\(entity.id)", target: .entity(entity), score: nil),
+            children: nil
+        )
+    }
+
+    private static func conflictNode(_ conflict: MemoryConflict) -> MemoryTreeNode {
+        MemoryTreeNode(
+            id: "conflict:\(conflict.id)",
+            display: .conflict(conflict),
+            row: MemoryTreeRow(id: "conflict:\(conflict.id)", target: .conflict(conflict), score: nil),
+            children: nil
         )
     }
 

@@ -24,6 +24,14 @@ class MemoryManager {
     var health: MemoryHealth?
     var stats: MemoryStats?
     var namespaces: [MemoryNamespace] = []
+    /// Unresolved disagreements — pairs of memories that contradict each other
+    /// and are both still current. Polled with the stats so the Overview can
+    /// show it without every view fetching its own copy.
+    ///
+    /// Not a health signal: both sides keep answering queries the whole time,
+    /// so a non-zero count means the store is being honest about holding two
+    /// answers, not that something is broken.
+    var conflictCount: Int = 0
 
     private var process: Process?
     private var processSource: DispatchSourceProcess?
@@ -64,6 +72,13 @@ class MemoryManager {
         self.sessionImport = SessionImportManager(clientProvider: { [weak self] in
             MemoryClient(base: self?.apiBase ?? "http://127.0.0.1:\(port)")
         })
+        // An import is the only in-app write to the store, so it is also the
+        // only moment the cached browse tree and the stats can go stale.
+        self.sessionImport.onImportCompleted = { [weak self] in
+            guard let self else { return }
+            self.browse.invalidate()
+            Task { await self.refreshOnce() }
+        }
     }
 
     /// Base URL of the REST/JSON management API.
@@ -165,6 +180,7 @@ class MemoryManager {
         health = nil
         stats = nil
         namespaces = []
+        conflictCount = 0
     }
 
     // MARK: - Polling
@@ -185,6 +201,9 @@ class MemoryManager {
         }
         if let s = try? await client.stats() { stats = s }
         if let ns = try? await client.namespaces() { namespaces = ns }
+        // `try?` on purpose: a binary predating /api/conflicts must degrade to
+        // "no conflicts shown", not break the whole refresh.
+        if let c = try? await client.conflicts() { conflictCount = c.count }
         // Once reachable, wire up a local LLM if the user hasn't configured one,
         // so extraction and dreaming work out of the box.
         if isReachable { await autodetectLlmEndpointIfNeeded(client: client) }

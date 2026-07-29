@@ -63,7 +63,8 @@ struct MemoryBrowseView: View {
 
     private var headerMetrics: some View {
         HStack(spacing: 16) {
-            metric("Items", browse.stats?.totalItems)
+            metric("Memories", browse.stats?.totalMemories)
+            metric("Links", browse.stats?.totalEdges)
             metric("Sessions", browse.stats?.totalSessions)
         }
     }
@@ -84,7 +85,10 @@ struct MemoryTreeRow: Identifiable, Equatable {
         case group(title: String)          // a synthetic grouping row (Sessions/Memories/a kind)
         case node(MemoryNode)              // a session/digest node (shows L0+L1)
         case level(node: MemoryNode, level: MemoryLevel)
-        case item(MemoryItem)
+        case memory(Memory)
+        /// Two memories that contradict each other and are both still current.
+        case conflict(MemoryConflict)
+        case entity(MemoryEntity)
     }
     let id: String
     let target: Target
@@ -109,7 +113,9 @@ struct MemoryTreeNode: Identifiable {
         case group(title: String, icon: String, tint: Color, count: Int?)
         case node(MemoryNode)
         case level(MemoryLevel)
-        case item(MemoryItem)
+        case memory(Memory)
+        case conflict(MemoryConflict)
+        case entity(MemoryEntity)
     }
 }
 
@@ -193,9 +199,29 @@ private struct MemoryNodeRow: View {
             case .level(let level):
                 glyph("arrow.turn.down.right", .secondary, small: true)
                 Text(level.tag).font(.callout).foregroundStyle(.green)
-            case .item(let item):
+            case .memory(let memory):
                 glyph("circle.fill", .indigo, tiny: true)
-                Text(item.name ?? item.body ?? "(memory)").lineLimit(1).truncationMode(.tail)
+                // Short title in the row; the statement is the tooltip and the
+                // detail pane.
+                Text(memory.title).lineLimit(1).truncationMode(.tail)
+                    .help(memory.statement ?? "")
+                // A contested result is worth flagging in the tree — otherwise
+                // you have to open every row to discover the store is holding
+                // two irreconcilable answers.
+                if memory.provenance?.isContested == true {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.orange)
+                }
+            case .entity(let entity):
+                glyph(entity.icon, .teal, small: true)
+                Text(entity.canonicalName).lineLimit(1).truncationMode(.tail)
+                Text(entity.entityType)
+                    .font(.caption2).foregroundStyle(.tertiary)
+                if entity.memoryCount > 0 { CountPill(entity.memoryCount) }
+            case .conflict(let conflict):
+                glyph("exclamationmark.triangle", .orange, small: true)
+                Text(conflict.a.title).lineLimit(1).truncationMode(.tail)
+                    .help((conflict.a.statement ?? "") + "\n  vs\n" + (conflict.b.statement ?? ""))
             }
             Spacer()
             if let score = node.score {
@@ -269,8 +295,12 @@ struct MemoryDetailPane: View {
             nodeSummary(node)
         case .level(let node, let level):
             LevelDetail(node: node, level: level).environment(manager)
-        case .item(let item):
-            itemDetail(item)
+        case .memory(let memory):
+            MemoryDetail(memory: memory).environment(manager)
+        case .conflict(let conflict):
+            conflictDetail(conflict)
+        case .entity(let entity):
+            EntityDetail(entity: entity).environment(manager)
         }
     }
 
@@ -299,23 +329,32 @@ struct MemoryDetailPane: View {
     }
 
     @ViewBuilder
-    private func itemDetail(_ item: MemoryItem) -> some View {
-        let body = item.body ?? ""
-        HStack(spacing: 8) {
-            if let kind = item.kind { Badge(text: kind, color: .indigo) }
-            if let name = item.name { Text(name).font(.title3.weight(.semibold)) }
-            if !body.isEmpty {
-                CopyButton(text: { body }, help: "Copy \(item.name ?? "memory")")
+    private func conflictDetail(_ conflict: MemoryConflict) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Unresolved disagreement").font(.title3.weight(.semibold))
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
-        }
-        if let project = item.project {
-            Text(project).font(.caption).foregroundStyle(.secondary)
-        }
-        if !body.isEmpty {
-            MarkdownText(body).frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text("This memory has no readable body.").foregroundStyle(.secondary)
+            Text("Both of these are still current and both still answer queries. "
+                 + "Nothing is hidden while they disagree — the consolidation pass "
+                 + "reconciles them into a new memory that supersedes both.")
+                .font(.callout).foregroundStyle(.secondary)
+            ForEach([conflict.a, conflict.b]) { side in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(side.statement ?? side.id).font(.callout.weight(.medium))
+                    HStack(spacing: 6) {
+                        Badge(text: side.sourceKind.label, color: .secondary)
+                        if let c = side.confidence {
+                            Text(String(format: "confidence %.2f", c))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
+            }
         }
     }
 
@@ -395,6 +434,235 @@ private struct LevelDetail: View {
         isLoading = true
         resolved = try? await manager.makeClient().node(uri: uri)
         isLoading = false
+    }
+}
+
+/// The detail pane for one memory: the statement, its metadata, the triple it
+/// was built from, and its typed edges.
+///
+/// Edges are fetched lazily on selection through the same `.task(id:)` +
+/// `resolveIfNeeded()` shape `LevelDetail` uses, rather than a second pattern:
+/// a list response carries no edges, so the neighbourhood has to come from
+/// `GET /api/memory/{id}` when a row is actually opened.
+private struct MemoryDetail: View {
+    let memory: Memory
+    @Environment(MemoryManager.self) private var manager
+
+    @State private var edges: [MemoryEdgeDTO] = []
+    @State private var isLoadingEdges = false
+    @State private var resolved: Memory?
+    @State private var isForgetting = false
+
+    private var effective: Memory { resolved ?? memory }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                if let kind = effective.kind { Badge(text: kind, color: .indigo) }
+                statusBadge
+                Spacer(minLength: 0)
+                CopyButton(text: { effective.statement ?? "" }, help: "Copy statement")
+                if effective.status == .active {
+                    Button("Forget") { Task { await forget() } }
+                        .controlSize(.small)
+                        .disabled(isForgetting)
+                        .help("Mark this as never having been true. It stays in the "
+                              + "log for provenance and stops being recalled — nothing "
+                              + "is deleted.")
+                }
+            }
+
+            Text(effective.statement ?? "(no statement)")
+                .font(.title3.weight(.semibold))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            metadataRow
+
+            edgesSection
+        }
+        .task(id: memory.id) { await loadEdges() }
+    }
+
+    private var statusBadge: some View {
+        Badge(text: effective.status.label,
+              color: effective.status == .active ? .green : .secondary)
+    }
+
+    @ViewBuilder
+    private var metadataRow: some View {
+        HStack(spacing: 10) {
+            Label(effective.sourceKind.label, systemImage: "person.crop.circle")
+            if let c = effective.confidence {
+                Label(String(format: "%.2f", c), systemImage: "gauge.medium")
+            }
+            if let project = effective.project {
+                Label(project, systemImage: "folder")
+            } else {
+                Label("global", systemImage: "globe")
+            }
+            if effective.derived {
+                Label("consolidated", systemImage: "sparkles")
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var edgesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(isLoadingEdges ? "Links" : "Links (\(edges.count))")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
+                if isLoadingEdges { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+            }
+            if !isLoadingEdges && edges.isEmpty {
+                Text("No links — nothing supersedes, refines or contradicts this.")
+                    .font(.callout).foregroundStyle(.tertiary)
+            }
+            ForEach(edges) { edge in
+                edgeRow(edge)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func edgeRow(_ edge: MemoryEdgeDTO) -> some View {
+        let outgoing = edge.outgoing(from: effective.id)
+        let type = edge.type
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: type?.icon ?? "link")
+                .font(.caption)
+                .foregroundStyle(type == .contradicts ? .orange : .secondary)
+                .frame(width: 16)
+            // Direction spelled out: "supersedes X" and "superseded by X" are
+            // opposite facts about the memory on screen.
+            Text(type?.phrase(outgoing: outgoing) ?? edge.edgeType)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(type == .contradicts ? .orange : .secondary)
+                .frame(width: 110, alignment: .leading)
+            Text(statement(for: edge.other(than: effective.id)))
+                .font(.callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Resolved statements for the far side of each edge, so a link reads as a
+    /// sentence rather than an opaque id.
+    @State private var neighbours: [String: String] = [:]
+    private func statement(for id: String) -> String { neighbours[id] ?? id }
+
+    private func forget() async {
+        isForgetting = true
+        defer { isForgetting = false }
+        guard (try? await manager.makeClient().retract(memory.id)) == true else { return }
+        // Reload through the browse manager so the tree drops the row too —
+        // a detail pane that updates while the tree still lists the memory is
+        // worse than not updating at all.
+        manager.browse.refresh(query: manager.browse.query, kind: manager.browse.kind)
+    }
+
+    private func loadEdges() async {
+        isLoadingEdges = true
+        defer { isLoadingEdges = false }
+        let client = manager.makeClient()
+        guard let shown = try? await client.show(memory.id), shown.type == "memory" else {
+            edges = []
+            return
+        }
+        if let m = shown.memory { resolved = m }
+        let found = shown.edges ?? []
+        edges = found
+        // One fetch per neighbour. Bounded by a memory's edge count, which is
+        // small; the batched path exists server-side for recall, not for a
+        // single opened row.
+        var resolvedNeighbours: [String: String] = [:]
+        for id in Set(found.map { $0.other(than: memory.id) }) {
+            if let other = try? await client.show(id), let m = other.memory {
+                resolvedNeighbours[id] = m.statement ?? id
+            }
+        }
+        neighbours = resolvedNeighbours
+    }
+}
+
+/// The detail pane for one entity: what it is, the surface forms attribution
+/// has learned, and the memories anchored to it.
+private struct EntityDetail: View {
+    let entity: MemoryEntity
+    @Environment(MemoryManager.self) private var manager
+
+    @State private var memories: [Memory] = []
+    @State private var isLoading = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: entity.icon).foregroundStyle(.teal)
+                Text(entity.canonicalName).font(.title3.weight(.semibold))
+                Badge(text: entity.entityType, color: .teal)
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Known as").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(entity.names.joined(separator: " · "))
+                    .font(.callout).textSelection(.enabled)
+                if entity.names.count <= 1 {
+                    // Worth stating rather than leaving it looking settled: one
+                    // name means no variant has ever resolved here, so variants
+                    // may still be landing as separate anchors.
+                    Text("No variant has resolved to this yet.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(isLoading ? "Memories" : "Memories (\(memories.count))")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
+                    if isLoading { ProgressView().controlSize(.small) }
+                    Spacer(minLength: 0)
+                }
+                if let error {
+                    // Never report "nothing references this" on a failed load:
+                    // an empty state and a broken one look identical to a
+                    // reader, and only one of them is true.
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange)
+                } else if !isLoading && memories.isEmpty {
+                    Text("Nothing references this entity.")
+                        .font(.callout).foregroundStyle(.tertiary)
+                }
+                ForEach(memories) { memory in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(memory.statement ?? memory.id).font(.callout)
+                        Text(memory.title).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .task(id: entity.id) { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        error = nil
+        defer { isLoading = false }
+        do {
+            memories = try await manager.makeClient().entity(entity.id).memories
+        } catch {
+            memories = []
+            self.error = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
     }
 }
 

@@ -95,13 +95,26 @@ struct MemoryClient {
         try await get("/api/stats", type: MemoryStats.self, timeout: 10)
     }
 
-    // MARK: - Items
+    // MARK: - Memories
 
-    /// `GET /api/memory` — every item, newest first, optionally one kind.
-    func list(kind: MemoryKind? = nil) async throws -> [MemoryItem] {
+    /// `GET /api/memory` — memories, newest first, optionally one kind.
+    ///
+    /// `status` defaults to `active` server-side. Pass `.superseded` /
+    /// `.retracted` to read history, or `nil` for everything — the server takes
+    /// the literal string `all` for that.
+    func list(kind: MemoryKind? = nil, status: MemoryStatus? = .active) async throws -> [Memory] {
         var query: [URLQueryItem] = []
         if let kind { query.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
-        return try await get("/api/memory", query: query, type: MemoryListResponse.self, timeout: 30).items
+        query.append(URLQueryItem(name: "status", value: status?.rawValue ?? "all"))
+        return try await get("/api/memory", query: query, type: MemoriesResponse.self, timeout: 30)
+            .memories
+    }
+
+    /// `GET /api/conflicts` — memories that contradict each other and are both
+    /// still current. Both sides keep answering queries the whole time; this is
+    /// a review surface, not a list of hidden things.
+    func conflicts() async throws -> [MemoryConflict] {
+        try await get("/api/conflicts", type: MemoryConflictsResponse.self, timeout: 20).conflicts
     }
 
     /// `GET /api/search` — hybrid semantic + keyword search.
@@ -126,7 +139,30 @@ struct MemoryClient {
         return try await get("/api/search", query: items, type: MemorySearchResponse.self, timeout: 45)
     }
 
-    /// `GET /api/memory/{id}` — an item by id or `kind/name`, or a node by URI.
+    /// `GET /api/entities` — the anchors memories reference, most-used first.
+    func entities() async throws -> [MemoryEntity] {
+        try await get("/api/entities", type: MemoryEntitiesResponse.self, timeout: 20).entities
+    }
+
+    /// `GET /api/entities/{id}` — one entity and the memories referencing it.
+    func entity(_ id: String) async throws -> MemoryEntityDetail {
+        try await get("/api/entities/\(encodeSegment(id))",
+                      type: MemoryEntityDetail.self, timeout: 20)
+    }
+
+    /// `DELETE /api/memory/{id}` — retract a memory.
+    ///
+    /// Nothing is deleted. The memory is marked as never having been true and
+    /// stays in the log for provenance; it simply stops being recalled. An
+    /// append-only store has no delete, so this is as destructive as it gets.
+    @discardableResult
+    func retract(_ id: String) async throws -> Bool {
+        try await delete("/api/memory/\(encodeSegment(id))",
+                         type: MemoryRetractResponse.self).retracted
+    }
+
+    /// `GET /api/memory/{id}` — a memory (with its edges) by id, or a node by
+    /// `memory://` URI.
     func show(_ id: String) async throws -> MemoryShowResponse {
         try await get("/api/memory/\(encodeSegment(id))", type: MemoryShowResponse.self, timeout: 30)
     }
