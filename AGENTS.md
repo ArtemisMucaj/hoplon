@@ -59,7 +59,8 @@ Hoplon/
                            #   SessionImport, NamespaceDetail, DreamSettings
     Code/                  # CodeDetailView (container), Overview,
                            #   NamespaceGraph, NamespaceInsight, Llm
-    Components/            # DesignSystem.swift, SharedComponents.swift
+    Components/            # DesignSystem.swift, SharedComponents.swift,
+                           #   LlmUsagesSection + LlmProviderRow (both LLM panes)
   Resources/               # the four binaries — GITIGNORED, fetched by scripts/
 scripts/                   # download (pinned release) + build (sibling checkout) per binary
 ```
@@ -129,7 +130,7 @@ at release time and a post-release merge ships in the *next* tag.
   twice: `MemoryPane`/`CodePane` both had a `.llm` case whose `id` was the raw
   value, and the sidebar keys proxied servers, memory namespaces and code
   namespaces all by bare name (a repo and a memory namespace can both be
-  "netatmo"). Prefix ids with the owning section — `SidebarRow` in RootView and
+  "platform"). Prefix ids with the owning section — `SidebarRow` in RootView and
   the namespaced `id` on the two pane enums.
 - **Startup failures get a reason.** Each manager tails its service's log and
   maps the two common ones (DuckDB lock conflict, port in use) to actionable
@@ -210,6 +211,27 @@ Two wrinkles worth knowing:
   Switching to an embedding model of a different width is rejected at the next
   open, so `GET /api/llm/endpoints` reports the pinned model and the LLM pane
   warns before the store is stranded.
+
+### Both LLM panes have the same shape
+
+`/api/llm/usages` is the whole screen: a row per job, each bound to an explicit
+(provider, model) pair, over a list of the registered servers.
+
+- **Nothing is "the active endpoint" in the UI.** The servers still carry an
+  `active` (and memory's `active_chat` / `active_embedding`), and that is what
+  an unbound job resolves through — but a screen that shows it invites the user
+  to set the default *and* the per-job override for the same decision. So the
+  list below is inventory: no badge, no radio, no activate button. The only
+  place the app writes `active` is silently, on the first endpoint registered,
+  so inheritance has somewhere to land.
+- **A job's picker always names a model, inherited or not.** The server reports
+  what an inherited usage resolves to; the picker selects that, rather than an
+  "Inherit" row with the resolved pair spelled out beside it in prose.
+- **Model lists are collapsed.** Which model runs a job is settled by the
+  pickers, so a server's models are reference material behind a disclosure —
+  `LlmProviderRow`. They are still *fetched* eagerly, because the pickers need
+  them.
+- Job descriptions live in `.help()` tooltips. A settings pane is not a manual.
 
 ## Known gaps
 

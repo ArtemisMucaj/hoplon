@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// LLM backend configuration for codesearch serve: manage the OpenAI-compatible
-/// endpoints stored in the server's config (add/update, set active) and discover
-/// the chat models each backend offers (OpenAI `/v1/models`, GitHub Copilot).
-/// Model ids feed the per-request override on the Call Graph explain stream.
+/// LLM backend configuration for codesearch serve: bind each LLM job to a
+/// provider + model, and manage the inference servers those come from (OpenAI
+/// `/v1/models`, GitHub Copilot). Model ids also feed the per-request override
+/// on the Call Graph explain stream.
+///
+/// No server is "the active one" on this screen — every job names its own pair,
+/// so the list below is inventory, not a selection.
 struct LlmView: View {
     @Environment(AppState.self) var state
 
@@ -27,15 +30,11 @@ struct LlmView: View {
 
     @State private var editingEndpoint: LlmEndpoint?
     @State private var showAddSheet = false
-    /// Set while activating a specific (endpoint, model) so its row shows a spinner.
-    @State private var settingModel: String?
 
-    // The live active backend + pinned Copilot model, so the UI can show which
-    // backend answers requests and reflect the selected Copilot model.
+    /// The server's backend target and pinned Copilot model. Nothing here sets
+    /// them any more — they are read so a Copilot job whose model list hasn't
+    /// loaded still shows the model that will actually run.
     @State private var activeTarget: LlmTargetResponse?
-    /// Set while switching the backend to Copilot / pinning a Copilot model, so
-    /// that row shows a spinner.
-    @State private var settingCopilotModel: String?
 
     // GitHub Copilot device-flow login (driven by the management API).
     @State private var copilotLogin: CopilotLoginStatus?
@@ -49,16 +48,6 @@ struct LlmView: View {
 
     private var manager: CodesearchManager { state.codesearchManager }
 
-    /// Whether an OpenAI endpoint is the live backend. An endpoint marked
-    /// `active` in config is only the *actual* active provider when the backend
-    /// target is also OpenAI — otherwise Copilot (say) is answering and the
-    /// endpoint's "active" state is just which one we'd use if we switched back.
-    /// Until the target has loaded, assume OpenAI (the server's default) so the
-    /// UI doesn't flicker the active endpoint off on first paint.
-    private var openaiIsActiveBackend: Bool {
-        (activeTarget?.target ?? .openai) == .openai
-    }
-
     /// Whether Copilot needs authentication (the models call reported it, or a
     /// login attempt failed).
     private var copilotNeedsAuth: Bool {
@@ -71,8 +60,7 @@ struct LlmView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 usagesSection
-                openaiSection
-                copilotSection
+                serversSection
             }
             .padding()
         }
@@ -157,13 +145,13 @@ struct LlmView: View {
         }
     }
 
-    /// Persist one usage's binding. `nil` clears it back to inherit.
-    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice?) async {
+    /// Persist one usage's binding.
+    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice) async {
         isSavingUsage = true
         defer { isSavingUsage = false }
         do {
             let updated = try await manager.makeClient().setLlmUsage(
-                usage.id, endpoint: choice?.endpoint, model: choice?.model
+                usage.id, endpoint: choice.endpoint, model: choice.model
             )
             if let idx = usages.firstIndex(where: { $0.id == updated.id }) {
                 usages[idx] = updated
@@ -173,177 +161,81 @@ struct LlmView: View {
         }
     }
 
-    // MARK: - Endpoints
+    // MARK: - Inference servers
 
-    // MARK: - OpenAI section (per-endpoint, with models + selection)
-
+    /// The registered servers, Copilot included, each folded to one row.
+    ///
+    /// Inventory, not a selection: no row is "the active one" now that every
+    /// job names its own provider and model above.
     @ViewBuilder
-    private var openaiSection: some View {
+    private var serversSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("OpenAI-compatible endpoints") {
-                if activeTarget?.target == .openai {
-                    Badge(text: "Active", color: .green)
-                }
-                Button { showAddSheet = true } label: { Label("Add Endpoint", systemImage: "plus") }
+            SectionHeader("Inference servers") {
+                if isLoadingEndpoints { ProgressView().controlSize(.small) }
+                Button { showAddSheet = true } label: { Label("Add", systemImage: "plus") }
                     .controlSize(.small)
             }
-            Text("Each endpoint (LM Studio, vLLM, hosted OpenAI, …) is stored by the codesearch server. Pick a model per endpoint; the active endpoint's model answers query expansion and call-flow explanations. API keys are write-only.")
-                .font(.caption).foregroundStyle(.secondary)
 
             if let endpointsError {
                 Label(endpointsError, systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.orange)
-            } else if let endpoints, endpoints.endpoints.isEmpty {
-                CardContainer {
-                    Text("No endpoints configured yet. Add one, or the server falls back to the OPENAI_* environment variables.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+            }
+
+            CardContainer {
+                VStack(spacing: 0) {
+                    ForEach(endpoints?.sortedEndpoints ?? []) { endpoint in
+                        endpointRow(endpoint)
+                        Divider()
+                    }
+                    copilotRow
                 }
-            } else if let endpoints {
-                ForEach(endpoints.sortedEndpoints) { endpoint in
-                    endpointCard(endpoint)
-                }
-            } else if isLoadingEndpoints {
-                HStack { ProgressView().controlSize(.small); Text("Loading endpoints…").foregroundStyle(.secondary) }
+            }
+
+            if let endpoints, endpoints.endpoints.isEmpty {
+                Text("No endpoint yet — codesearch falls back to the OPENAI_* environment.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    /// One endpoint as a card: header (name + active badge + activate/edit) and
-    /// its model list, where tapping a model selects it (and activates the
-    /// endpoint) via a config write.
     @ViewBuilder
-    private func endpointCard(_ endpoint: LlmEndpoint) -> some View {
+    private func endpointRow(_ endpoint: LlmEndpoint) -> some View {
         let list = endpointModels[endpoint.name] ?? ModelList()
-        // "Active" here means the live provider — this endpoint is the chosen
-        // OpenAI one AND OpenAI is the active backend. When Copilot is active,
-        // no OpenAI endpoint reads as active.
-        let isActive = endpoint.active && openaiIsActiveBackend
-        CardContainer {
-            VStack(alignment: .leading, spacing: 0) {
-                // Header
-                HStack(spacing: 10) {
-                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isActive ? Color.green : Color.secondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(endpoint.name).fontWeight(.medium)
-                            if isActive { Badge(text: "Active", color: .green) }
-                            if endpoint.hasKey {
-                                Image(systemName: "key.fill").font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        Text(endpoint.baseUrl)
-                            .font(.caption.monospaced()).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                        // Make the current model explicit, since an endpoint can
-                        // run with no pinned model (the server picks a default).
-                        HStack(spacing: 4) {
-                            Text("Model:").font(.caption2).foregroundStyle(.tertiary)
-                            if let model = endpoint.model, !model.isEmpty {
-                                Text(model).font(.caption2.monospaced()).foregroundStyle(.primary)
-                            } else {
-                                Text("none — server default").font(.caption2).foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                    Spacer()
-                    if list.isLoading {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Button { loadModels(for: endpoint) } label: { Image(systemName: "arrow.clockwise") }
-                            .buttonStyle(.borderless).help("Reload models")
-                    }
-                    Button { editingEndpoint = endpoint } label: { Image(systemName: "pencil") }
-                        .buttonStyle(.borderless).help("Edit endpoint")
-                }
-                .padding(12)
-                Divider()
-                // Models
-                modelList(list)
-            }
+        LlmProviderRow(
+            name: endpoint.name,
+            subtitle: endpoint.baseUrl,
+            hasKey: endpoint.hasKey,
+            isLoading: list.isLoading,
+            error: list.error,
+            models: list.models.map { LlmModelRow(id: $0.id, detail: $0.name) },
+            loaded: list.loaded
+        ) {
+            Button { loadModels(for: endpoint) } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless).help("Reload models")
+            Button { editingEndpoint = endpoint } label: { Image(systemName: "pencil") }
+                .buttonStyle(.borderless).help("Edit endpoint")
         }
     }
 
-    /// The models a provider offers. A plain list: picking one happens in the
-    /// usages section above, so there is no selection state here.
+    /// Copilot as one more server in the list — a sign-in row until the device
+    /// flow completes, then a normal collapsed row.
     @ViewBuilder
-    private func modelList(_ list: ModelList) -> some View {
-        if let error = list.error {
-            Label(error, systemImage: "exclamationmark.triangle")
-                .font(.caption).foregroundStyle(.orange)
-                .padding(12)
-        } else if list.models.isEmpty {
-            Text(list.loaded ? "No models offered by this endpoint." : "Loading models…")
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+    private var copilotRow: some View {
+        if copilotNeedsAuth || isPendingLogin {
+            CopilotSignInRow(login: copilotLogin, isStarting: isStartingLogin) {
+                Task { await startCopilotLogin() }
+            }
         } else {
-            VStack(spacing: 0) {
-                ForEach(list.models) { model in
-                    HStack(spacing: 8) {
-                        Text(model.label).font(.callout)
-                            .lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        if model.name != nil {
-                            Text(model.id).font(.caption.monospaced()).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 5)
-                    if model.id != list.models.last?.id { Divider() }
-                }
-            }
-        }
-    }
-
-    // MARK: - Copilot section
-
-    @ViewBuilder
-    private var copilotSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("GitHub Copilot models") {
-                if activeTarget?.target == .copilot {
-                    Badge(text: "Active", color: .green)
-                }
-                if copilotModels.isLoading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button { loadCopilotModels() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless).help("Reload Copilot models")
-                }
-            }
-            Text("Pick a model to use GitHub Copilot as the active backend — selecting one switches the server to Copilot and answers query expansion and call-flow explanations. The choice persists across restarts.")
-                .font(.caption).foregroundStyle(.secondary)
-            if copilotNeedsAuth || isPendingLogin {
-                copilotLoginCard
-            } else if let error = copilotModels.error {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange)
-            } else if copilotModels.models.isEmpty {
-                CardContainer {
-                    Text(copilotModels.loaded ? "No Copilot models available." : "Loading models…")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                }
-            } else {
-                CardContainer {
-                    VStack(spacing: 0) {
-                        ForEach(copilotModels.models) { model in
-                            HStack(spacing: 8) {
-                                Text(model.label).font(.callout)
-                                    .lineLimit(1).truncationMode(.middle)
-                                Spacer()
-                                if model.name != nil {
-                                    Text(model.id).font(.caption.monospaced())
-                                        .foregroundStyle(.tertiary).textSelection(.enabled)
-                                }
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 5)
-                            if model.id != copilotModels.models.last?.id { Divider() }
-                        }
-                    }
-                }
+            LlmProviderRow(
+                name: "GitHub Copilot",
+                subtitle: "chat only · your Copilot subscription",
+                isLoading: copilotModels.isLoading,
+                error: copilotModels.error,
+                models: copilotModels.models.map { LlmModelRow(id: $0.id, detail: $0.name) },
+                loaded: copilotModels.loaded
+            ) {
+                Button { loadCopilotModels() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless).help("Reload Copilot models")
             }
         }
     }
@@ -352,55 +244,6 @@ struct LlmView: View {
     private var isPendingLogin: Bool {
         if case .pending = copilotLogin?.state { return true }
         return isStartingLogin
-    }
-
-    /// The sign-in card: a "Sign in" button, or the device code + a link to the
-    /// verification page while pending, or the failure reason.
-    @ViewBuilder
-    private var copilotLoginCard: some View {
-        CardContainer {
-            VStack(alignment: .leading, spacing: 10) {
-                if let login = copilotLogin, login.state == .pending, let code = login.userCode {
-                    Text("Sign in to GitHub Copilot").font(.callout.weight(.medium))
-                    Text("1. Open the page below.  2. Enter this code:")
-                        .font(.caption).foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
-                        Text(code)
-                            .font(.title3.monospaced().weight(.semibold))
-                            .textSelection(.enabled)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(code, forType: .string)
-                        } label: { Image(systemName: "doc.on.doc") }
-                            .buttonStyle(.borderless).help("Copy code")
-                        if let uri = login.verificationUri, let url = URL(string: uri) {
-                            Link(destination: url) { Label("Open GitHub", systemImage: "arrow.up.right.square") }
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Waiting for authorization…").font(.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    if case .failed = copilotLogin?.state, let err = copilotLogin?.error {
-                        Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-                    } else {
-                        Text("GitHub Copilot isn't connected yet.").font(.callout).foregroundStyle(.secondary)
-                    }
-                    Button {
-                        Task { await startCopilotLogin() }
-                    } label: {
-                        Label("Sign in to GitHub Copilot", systemImage: "person.badge.key")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isStartingLogin)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-        }
     }
 
     // MARK: - Actions
@@ -450,7 +293,7 @@ struct LlmView: View {
                 // selected one in the meantime) and models are available.
                 if hasNoModel, let first = response.models.first,
                    (endpoints?.endpoints.first(where: { $0.name == name })?.model ?? "").isEmpty {
-                    await selectModel(first.id, for: endpoint, activate: false)
+                    await pinModel(first.id, for: endpoint)
                 }
             } catch is CancellationError {
             } catch {
@@ -521,25 +364,18 @@ struct LlmView: View {
         }
     }
 
-    /// Select a model for an endpoint — writes it through the config API, then
-    /// refreshes. `activate` also makes the endpoint active: `true` for a user
-    /// tap (pick a model → use it), `false` for auto-pinning a default (which
-    /// shouldn't change which endpoint is active).
-    private func selectModel(_ modelID: String, for endpoint: LlmEndpoint, activate: Bool = true) async {
-        settingModel = "\(endpoint.name)/\(modelID)"
-        defer { settingModel = nil }
+    /// Pin a model on an endpoint that has none, so its configured model is a
+    /// concrete id rather than the server's implicit default (which the UI
+    /// can't reflect). Never changes which endpoint the server treats as
+    /// active — that is not a choice this screen makes.
+    private func pinModel(_ modelID: String, for endpoint: LlmEndpoint) async {
         do {
             let response = try await manager.makeClient().upsertLlmEndpoint(
                 name: endpoint.name,
                 LlmUpsertEndpointRequest(baseUrl: endpoint.baseUrl, model: modelID, apiKey: nil,
-                                         setActive: activate || endpoint.active)
+                                         setActive: endpoint.active)
             )
             await MainActor.run { endpoints = response }
-            // A user tap picks this model to *use*, so the backend must be
-            // OpenAI too — otherwise Copilot could stay active while the UI
-            // shows a freshly-picked OpenAI model. Auto-pin (activate=false)
-            // never changes the backend.
-            if activate { await setBackend(.openai) }
         } catch {
             await MainActor.run {
                 endpointsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -547,24 +383,9 @@ struct LlmView: View {
         }
     }
 
-    private func activate(_ name: String) async {
-        do {
-            let response = try await manager.makeClient().setActiveLlmEndpoint(name: name)
-            await MainActor.run {
-                endpoints = response
-                // Activating an OpenAI endpoint also makes OpenAI the backend, so
-                // switch the target too — otherwise the server could stay on
-                // Copilot while the UI shows a freshly-activated OpenAI endpoint.
-                Task { await setBackend(.openai) }
-            }
-        } catch {
-            await MainActor.run {
-                endpointsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-    }
-
-    /// Load which backend is live and which Copilot model is pinned.
+    /// Load which backend is live and which Copilot model is pinned — read-only
+    /// here, and only so a Copilot job can name its model before the model list
+    /// arrives.
     private func loadTarget() {
         let client = manager.makeClient()
         Task {
@@ -574,38 +395,16 @@ struct LlmView: View {
         }
     }
 
-    /// Switch the active backend (no model change). Used when activating an
-    /// OpenAI endpoint so the backend follows the selection.
-    private func setBackend(_ backend: LlmBackend) async {
-        guard activeTarget?.target != backend else { return }
-        if let updated = try? await manager.makeClient().setLlmTarget(backend) {
-            await MainActor.run { activeTarget = updated }
-        }
-    }
-
-    /// Pick a Copilot model: pin it and switch the active backend to Copilot in
-    /// one gesture (mirroring how tapping an OpenAI model activates its endpoint).
-    private func selectCopilotModel(_ modelID: String) async {
-        await MainActor.run { settingCopilotModel = modelID }
-        defer { Task { @MainActor in settingCopilotModel = nil } }
-        do {
-            let client = manager.makeClient()
-            // Pin the model, then make Copilot the active backend. The second
-            // call returns the authoritative target we render from.
-            _ = try await client.setCopilotModel(modelID)
-            let updated = try await client.setLlmTarget(.copilot)
-            await MainActor.run { activeTarget = updated }
-        } catch {
-            await MainActor.run {
-                copilotModels.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            }
-        }
-    }
-
     /// Shared save path for add + edit. Returns whether the save succeeded so
     /// the sheet stays open on failure (letting the user correct/retry) and only
     /// dismisses once the endpoint is persisted. Errors surface on the page.
     private func save(name: String, request: LlmUpsertEndpointRequest) async -> Bool {
+        var request = request
+        // Nothing on this screen picks a default server any more, but the
+        // server still resolves unbound jobs through one — so the first
+        // endpoint registered silently becomes it, rather than leaving every
+        // job on the OPENAI_* fallback.
+        if endpoints?.active == nil { request.setActive = true }
         do {
             let response = try await manager.makeClient().upsertLlmEndpoint(name: name, request)
             await MainActor.run {
@@ -641,7 +440,6 @@ struct EndpointEditorView: View {
     @State private var baseUrl: String
     @State private var model: String
     @State private var apiKey = ""
-    @State private var setActive: Bool
     @State private var isSaving = false
 
     init(existing: LlmEndpoint?, onSave: @escaping (String, LlmUpsertEndpointRequest) async -> Bool) {
@@ -653,7 +451,6 @@ struct EndpointEditorView: View {
         // prompt reflect the bare host.
         _baseUrl   = State(initialValue: existing?.baseUrl ?? "http://127.0.0.1:1234")
         _model     = State(initialValue: existing?.model ?? "")
-        _setActive = State(initialValue: existing?.active ?? false)
     }
 
     private var isValid: Bool {
@@ -673,8 +470,6 @@ struct EndpointEditorView: View {
                 TextField("Model (optional)", text: $model)
                 SecureField(existing?.hasKey == true ? "API key (leave blank to keep current)" : "API key (optional)",
                             text: $apiKey)
-                Toggle("Set as active endpoint", isOn: $setActive)
-                    .disabled(existing?.active == true)
             }
             .textFieldStyle(.roundedBorder)
 
@@ -693,7 +488,9 @@ struct EndpointEditorView: View {
                         baseUrl: cleanedBase,
                         model: model.isEmpty ? nil : model,
                         apiKey: apiKey.isEmpty ? nil : apiKey,
-                        setActive: setActive
+                        // The owning pane decides this: the first endpoint
+                        // registered becomes the fallback, nothing else does.
+                        setActive: existing?.active ?? false
                     )
                     let endpointName = name.trimmingCharacters(in: .whitespaces)
                     Task {

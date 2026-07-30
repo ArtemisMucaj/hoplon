@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// LLM backend configuration for memory-rs serve: manage the OpenAI-compatible
-/// endpoints stored in the server's config (add/update, set active) and discover
-/// the models each backend offers.
+/// LLM backend configuration for memory-rs serve: bind each memory job to a
+/// provider + model, and manage the inference servers those come from.
 ///
 /// Deliberately separate from codesearch's LLM config: the two services often
 /// want different backends (a small local model doing memory extraction, a
 /// hosted one answering code questions), so each owns its endpoints.
 ///
-/// The one structural difference from the codesearch screen is that memory
-/// resolves **chat and embeddings independently** — an endpoint can be the chat
-/// backend, the embedding backend, or both — so each card's model list has a
-/// Chat/Embeddings switch deciding which slot a tapped model fills.
+/// No server is "the active one" here — memory resolves chat and embeddings
+/// independently and every job can name its own pair, so the list below is
+/// inventory, not a selection.
 struct MemoryLlmView: View {
     @Environment(AppState.self) var state
 
@@ -50,8 +48,7 @@ struct MemoryLlmView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 usagesSection
-                endpointsSection
-                copilotSection
+                serversSection
                 if let pinned = config?.pinnedEmbedding { pinnedSection(pinned) }
             }
             .padding()
@@ -131,132 +128,88 @@ struct MemoryLlmView: View {
         chatChoices.filter { $0.endpoint != MemoryLlmConfig.copilotEndpointName }
     }
 
-    // MARK: - Endpoints
+    // MARK: - Inference servers
 
+    /// The registered servers, Copilot included, each folded to one row.
+    ///
+    /// Inventory, not a selection: no row is "the active one" now that every
+    /// job names its own provider and model above.
     @ViewBuilder
-    private var endpointsSection: some View {
+    private var serversSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("OpenAI-compatible endpoints") {
-                Button { showAddSheet = true } label: { Label("Add Endpoint", systemImage: "plus") }
+            SectionHeader("Inference servers") {
+                if isLoadingConfig { ProgressView().controlSize(.small) }
+                Button { showAddSheet = true } label: { Label("Add", systemImage: "plus") }
                     .controlSize(.small)
             }
-            Text("Each endpoint (LM Studio, vLLM, hosted OpenAI, …) is stored by the memory server. Chat and embeddings resolve independently, so one endpoint can answer extraction while another embeds. API keys are write-only.")
-                .font(.caption).foregroundStyle(.secondary)
 
             if let configError {
                 Label(configError, systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.orange)
-            } else if let config, config.endpoints.isEmpty {
-                CardContainer {
-                    Text("No endpoints configured yet. Add one, or the server falls back to the OPENAI_* environment variables.")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+            }
+
+            CardContainer {
+                VStack(spacing: 0) {
+                    ForEach(config?.endpoints ?? []) { endpoint in
+                        endpointRow(endpoint)
+                        Divider()
+                    }
+                    copilotRow
                 }
-            } else if let config {
-                ForEach(config.endpoints) { endpoint in
-                    endpointCard(endpoint, config: config)
-                }
-            } else if isLoadingConfig {
-                HStack { ProgressView().controlSize(.small); Text("Loading endpoints…").foregroundStyle(.secondary) }
+            }
+
+            if let config, config.endpoints.isEmpty {
+                Text("No endpoint yet — memory falls back to the OPENAI_* environment.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    /// One endpoint as a card: what it is, and the models it offers.
-    ///
-    /// Read-only by design — selection moved to the usages section above, so
-    /// this answers "which servers do I have and what do they run" without
-    /// competing for the same decision.
     @ViewBuilder
-    private func endpointCard(_ endpoint: MemoryLlmEndpoint, config: MemoryLlmConfig) -> some View {
+    private func endpointRow(_ endpoint: MemoryLlmEndpoint) -> some View {
         let list = endpointModels[endpoint.name] ?? ModelList()
-        // "In use" means some usage resolves here, which is what the badge is
-        // for — the roles themselves are no longer edited on this screen.
-        let usedBy = usages.filter { $0.endpoint == endpoint.name }
-
-        CardContainer {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: usedBy.isEmpty ? "circle" : "checkmark.circle.fill")
-                        .foregroundStyle(usedBy.isEmpty ? Color.secondary : Color.green)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(endpoint.name).fontWeight(.medium)
-                                .lineLimit(1).truncationMode(.tail)
-                            if endpoint.hasApiKey {
-                                Image(systemName: "key.fill").font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        Text(endpoint.baseUrl)
-                            .font(.caption.monospaced()).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                        if !usedBy.isEmpty {
-                            Text("used by \(usedBy.map(\.label).joined(separator: ", "))")
-                                .font(.caption2).foregroundStyle(.tertiary)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .layoutPriority(1)
-
-                    HStack(spacing: 6) {
-                        if list.isLoading {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Button { loadModels(for: endpoint) } label: { Image(systemName: "arrow.clockwise") }
-                                .buttonStyle(.borderless).help("Reload models")
-                        }
-                        Button { editingEndpoint = endpoint } label: { Image(systemName: "pencil") }
-                            .buttonStyle(.borderless).help("Edit endpoint")
-                        Button(role: .destructive) {
-                            Task { await remove(endpoint) }
-                        } label: { Image(systemName: "trash") }
-                            .buttonStyle(.borderless).help("Remove endpoint")
-                    }
-                    .fixedSize()
-                    .layoutPriority(2)
-                }
-                .padding(12)
-                Divider()
-                modelList(list)
-            }
+        LlmProviderRow(
+            name: endpoint.name,
+            subtitle: endpoint.baseUrl,
+            hasKey: endpoint.hasApiKey,
+            isLoading: list.isLoading,
+            error: list.error,
+            models: list.models.map { LlmModelRow(id: $0.id, detail: $0.vendor) },
+            loaded: list.loaded
+        ) {
+            Button { loadModels(for: endpoint) } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless).help("Reload models")
+            Button { editingEndpoint = endpoint } label: { Image(systemName: "pencil") }
+                .buttonStyle(.borderless).help("Edit endpoint")
+            Button(role: .destructive) {
+                Task { await remove(endpoint) }
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).help("Remove endpoint")
         }
     }
 
-    /// The models a provider offers. A plain list: picking one happens in the
-    /// usages section above, so there is no selection state here.
+    /// Copilot as one more server in the list — a sign-in row until the device
+    /// flow completes, then a normal collapsed row.
     @ViewBuilder
-    private func modelList(_ list: ModelList) -> some View {
-        if let error = list.error {
-            Label(error, systemImage: "exclamationmark.triangle")
-                .font(.caption).foregroundStyle(.orange)
-                .padding(12)
-        } else if list.models.isEmpty {
-            Text(list.loaded ? "No models offered by this endpoint." : "Loading models…")
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
+    private var copilotRow: some View {
+        if copilotNeedsAuth || isPendingLogin {
+            CopilotSignInRow(login: copilotLogin, isStarting: isStartingLogin) {
+                Task { await startCopilotLogin() }
+            }
         } else {
-            VStack(spacing: 0) {
-                ForEach(list.models) { model in
-                    HStack(spacing: 8) {
-                        Text(model.id).font(.callout)
-                            .lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        if let vendor = model.vendor {
-                            Text(vendor).font(.caption).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 5)
-                    if model.id != list.models.last?.id { Divider() }
-                }
+            LlmProviderRow(
+                name: "GitHub Copilot",
+                subtitle: "chat only · your Copilot subscription",
+                isLoading: copilotModels.isLoading,
+                error: copilotModels.error,
+                models: copilotModels.models.map { LlmModelRow(id: $0.id, detail: $0.vendor) },
+                loaded: copilotModels.loaded
+            ) {
+                Button { loadCopilotModels() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless).help("Reload Copilot models")
             }
         }
     }
-
-    // MARK: - Copilot section
 
     /// Whether Copilot needs authentication (never logged in, or a login failed).
     private var copilotNeedsAuth: Bool {
@@ -269,131 +222,21 @@ struct MemoryLlmView: View {
         return false
     }
 
-    @ViewBuilder
-    private var copilotSection: some View {
-        let isActive = config?.copilotIsChatBackend == true
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("GitHub Copilot models") {
-                if isActive { Badge(text: "Active", color: .green) }
-                if copilotModels.isLoading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button { loadCopilotModels() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.borderless).help("Reload Copilot models")
-                }
-            }
-            Text("Pick a model to use your GitHub Copilot subscription for memory extraction and dreaming — selecting one switches chat to Copilot. Embeddings are unaffected; Copilot serves chat only.")
-                .font(.caption).foregroundStyle(.secondary)
-
-            if copilotNeedsAuth || isPendingLogin {
-                copilotLoginCard
-            } else if let error = copilotModels.error {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange)
-            } else if copilotModels.models.isEmpty {
-                CardContainer {
-                    Text(copilotModels.loaded ? "No Copilot models available." : "Loading models…")
-                        .font(.callout).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                }
-            } else {
-                CardContainer {
-                    VStack(spacing: 0) {
-                        ForEach(copilotModels.models) { model in
-                            HStack(spacing: 8) {
-                                Text(model.id).font(.callout)
-                                    .lineLimit(1).truncationMode(.middle)
-                                Spacer()
-                                if let vendor = model.vendor {
-                                    Text(vendor).font(.caption).foregroundStyle(.tertiary)
-                                }
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 5)
-                            if model.id != copilotModels.models.last?.id { Divider() }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// The device-flow login card: a start button, then the code + verification
-    /// URL while pending. The server polls GitHub and persists the token, so the
-    /// UI only has to poll status.
-    @ViewBuilder
-    private var copilotLoginCard: some View {
-        CardContainer {
-            VStack(alignment: .leading, spacing: 10) {
-                switch copilotLogin?.state {
-                case .pending:
-                    Text("Sign in to GitHub").font(.callout.weight(.medium))
-                    // The user has to type this code on GitHub, so make it big,
-                    // monospaced and copyable rather than a caption.
-                    HStack(spacing: 10) {
-                        Text(copilotLogin?.userCode ?? "…")
-                            .font(.title2.monospaced().weight(.semibold))
-                            .textSelection(.enabled)
-                        if let code = copilotLogin?.userCode {
-                            CopyButton(text: { code }, help: "Copy the device code")
-                        }
-                    }
-                    if let uri = copilotLogin?.verificationUri, let url = URL(string: uri) {
-                        HStack(spacing: 8) {
-                            Link("Open \(uri)", destination: url)
-                                .font(.callout)
-                            ProgressView().controlSize(.small)
-                            Text("waiting for authorization…")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                case .failed:
-                    Label(copilotLogin?.error ?? "Login failed.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout).foregroundStyle(.red)
-                    Button("Try Again") { Task { await startCopilotLogin() } }
-                        .disabled(isStartingLogin)
-                default:
-                    Text("Not signed in to GitHub Copilot.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        Button {
-                            Task { await startCopilotLogin() }
-                        } label: {
-                            Label("Sign in with GitHub", systemImage: "person.badge.key")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isStartingLogin)
-                        if isStartingLogin { ProgressView().controlSize(.small) }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-        }
-    }
-
     // MARK: - Pinned embedding warning
 
     @ViewBuilder
     private func pinnedSection(_ pinned: MemoryPinnedEmbedding) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Embedding dimension")
-            CardContainer {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Pinned to \(pinned.model) · \(pinned.dimensions) dimensions")
-                            .font(.callout.weight(.medium))
-                        // The one setting here that can strand the store, so it
-                        // gets an explicit warning rather than a failure at the
-                        // next launch.
-                        Text("The database was created with this embedding width. Switching to a model that emits a different width is rejected when memory next opens the store — existing vectors would not be comparable.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(12)
+        CardContainer {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                // The one setting here that can strand the store, so it gets a
+                // warning rather than a failure at the next launch.
+                Text("Embeddings are pinned to \(pinned.model) · \(pinned.dimensions) dimensions. A model of a different width is rejected when memory next opens the store.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
+            .padding(12)
         }
     }
 
@@ -406,20 +249,17 @@ struct MemoryLlmView: View {
         }
     }
 
-    /// Persist one usage's binding. `nil` clears it back to inherit.
-    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice?) async {
+    /// Persist one usage's binding.
+    private func bindUsage(_ usage: LlmUsage, to choice: LlmChoice) async {
         isSavingUsage = true
         defer { isSavingUsage = false }
         do {
             let updated = try await manager.makeClient().setLlmUsage(
-                usage.id, endpoint: choice?.endpoint, model: choice?.model
+                usage.id, endpoint: choice.endpoint, model: choice.model
             )
             if let idx = usages.firstIndex(where: { $0.id == updated.id }) {
                 usages[idx] = updated
             }
-            // The endpoint cards show which usages point at them, so refresh
-            // the config too.
-            load(reloadModels: false)
         } catch {
             configError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -525,6 +365,12 @@ struct MemoryLlmView: View {
     // MARK: - Actions
 
     private func save(name: String, request: MemoryLlmUpsertRequest) async -> Bool {
+        var request = request
+        // Nothing on this screen sets a "default" server any more, but the
+        // server still resolves unbound jobs through one — so the first
+        // endpoint registered silently becomes it, rather than leaving every
+        // job pointing at the OPENAI_* fallback.
+        if config?.active == nil { request.setActive = .shared }
         do {
             config = try await manager.makeClient().upsertLlmEndpoint(name: name, request)
             if let endpoint = config?.endpoints.first(where: { $0.name == name }) {
@@ -563,7 +409,6 @@ struct MemoryEndpointEditorView: View {
     @State private var model: String
     @State private var embeddingModel: String
     @State private var apiKey = ""
-    @State private var setActive: LlmRole?
     @State private var isSaving = false
 
     init(existing: MemoryLlmEndpoint?, onSave: @escaping (String, MemoryLlmUpsertRequest) async -> Bool) {
@@ -595,12 +440,6 @@ struct MemoryEndpointEditorView: View {
                 TextField("Embedding model (optional)", text: $embeddingModel)
                 SecureField(existing?.hasApiKey == true ? "API key (leave blank to keep current)" : "API key (optional)",
                             text: $apiKey)
-                Picker("Use for", selection: $setActive) {
-                    Text("Don't change").tag(LlmRole?.none)
-                    ForEach(LlmRole.allCases) { role in
-                        Text(role.label).tag(LlmRole?.some(role))
-                    }
-                }
             }
             .textFieldStyle(.roundedBorder)
 
@@ -619,8 +458,7 @@ struct MemoryEndpointEditorView: View {
                         baseUrl: cleanedBase,
                         model: model.isEmpty ? nil : model,
                         embeddingModel: embeddingModel.isEmpty ? nil : embeddingModel,
-                        apiKey: apiKey.isEmpty ? nil : apiKey,
-                        setActive: setActive
+                        apiKey: apiKey.isEmpty ? nil : apiKey
                     )
                     let endpointName = name.trimmingCharacters(in: .whitespaces)
                     Task {

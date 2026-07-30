@@ -172,7 +172,10 @@ struct SettingsView: View {
                 detailPane
             }
         }
-        .frame(minWidth: 720, idealWidth: 820, minHeight: 480, idealHeight: 620)
+        // Wide enough for the LLM panes: a 220pt sidebar, a job label, and a
+        // fixed-width model picker beside it. At 720 the picker pushed the
+        // section's own controls off the right edge.
+        .frame(minWidth: 820, idealWidth: 880, minHeight: 480, idealHeight: 620)
     }
 
     // MARK: Top bar

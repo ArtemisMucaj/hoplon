@@ -703,29 +703,6 @@ nonisolated struct MemoryLlmConfig: Codable, Equatable {
         copilot         = try? c.decode(MemoryCopilotState.self, forKey: .copilot)
     }
 
-    /// Whether Copilot is the chat backend right now.
-    var copilotIsChatBackend: Bool {
-        resolved(.chat) == Self.copilotEndpointName
-    }
-
-    /// The endpoint bound to `role`, resolving chat/embedding through the
-    /// shared default the way the server does.
-    func resolved(_ role: LlmRole) -> String? {
-        switch role {
-        case .shared:    return active
-        case .chat:      return activeChat ?? active
-        case .embedding: return activeEmbedding ?? active
-        }
-    }
-
-    /// Whether `role` names its own endpoint rather than inheriting `active`.
-    func isExplicit(_ role: LlmRole) -> Bool {
-        switch role {
-        case .shared:    return active != nil
-        case .chat:      return activeChat != nil
-        case .embedding: return activeEmbedding != nil
-        }
-    }
 }
 
 /// Body for `PUT /api/llm/endpoints/{name}`.
@@ -893,5 +870,8 @@ nonisolated struct LlmChoice: Identifiable, Hashable {
     let endpoint: String
     let model: String?
     var id: String { "\(endpoint)/\(model ?? "-")" }
-    var label: String { model.map { "\(endpoint) · \($0)" } ?? endpoint }
+    /// Model first: a picker in a settings pane truncates from the right, and
+    /// the model is the part the user came to read — an embedding id runs past
+    /// the width a popup button gets, so the endpoint is what gives way.
+    var label: String { model.map { "\($0) · \(endpoint)" } ?? endpoint }
 }
