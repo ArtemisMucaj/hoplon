@@ -80,23 +80,19 @@ Per-binary, if you need one in particular:
 ```bash
 bash scripts/download_panoply_binary.sh      # pinned release + SHA-256 verify
 bash scripts/download_guardrails_binary.sh
-bash scripts/download_memory_binary.sh       # currently FAILS — see below
-bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the working path)
-bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the working path)
+bash scripts/download_codesearch_binary.sh   # pinned release (v2.0.0) + SHA-256 verify
+bash scripts/download_memory_binary.sh       # pinned release (v0.2.1) + SHA-256 verify
+bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the fallback path)
+bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the fallback path)
 bash scripts/build_panoply_binary.sh         # builds from ../panoply
 ```
 
-**codesearch is built from source too.** The app targets the post-extraction
-build — memory moved out into memory-rs, the LLM stack moved onto openai-rs —
-and no release carries that yet. `download_codesearch_binary.sh` exists but
-warns loudly if the asset still has a `memory` command, because that build would
-serve `/api/memory` and fight memory-rs over the same concern.
-
-**memory-rs has no release assets.** Its v0.1.0 tag exists but the build job
-published nothing, so `download_memory_binary.sh` fails by design (fail-closed:
-it will not install an unverified or missing binary). Use
-`build_memory_binary.sh` until a release ships assets; `fetch_binaries.sh`
-already falls back to it automatically.
+All four binaries now ship as pinned release assets, so `fetch_binaries.sh`
+downloads each and falls back to a sibling build only if the download fails.
+codesearch is pinned to v2.0.0 (the post-extraction build — memory moved to
+memory-rs, LLM stack to openai-rs) and memory-rs to v0.2.1. Both download
+scripts fail closed if a pin points at an asset that predates the feature the
+app drives it with.
 
 The download scripts are deliberately paranoid — they refuse non-macOS assets,
 abort on a missing checksum manifest, and probe the binary for the subcommand
