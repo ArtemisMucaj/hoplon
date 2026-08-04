@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  # Manual re-trigger: GitHub occasionally skips the push-triggered run for a
+  # merge, leaving release-please without a chance to open the next Release PR.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+
+  build-macos-app:
+    name: Build macOS app + DMG
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch bundled binaries
+        run: bash scripts/fetch_binaries.sh
+
+      - name: Build Xcode project
+        run: |
+          xcodebuild \
+            -project Hoplon.xcodeproj \
+            -scheme Hoplon \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            build
+
+      - name: Ad-hoc sign the app
+        run: |
+          codesign --force --deep --sign - \
+            "build/DerivedData/Build/Products/Release/Hoplon.app"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          mkdir -p dist
+          create-dmg \
+            --volname "Hoplon" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Hoplon.app" 175 190 \
+            --hide-extension "Hoplon.app" \
+            --app-drop-link 425 190 \
+            "dist/Hoplon-${{ needs.release-please.outputs.tag_name }}.dmg" \
+            "build/DerivedData/Build/Products/Release/Hoplon.app"
+
+      - name: Upload DMG to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release-please.outputs.tag_name }} \
+            dist/Hoplon-${{ needs.release-please.outputs.tag_name }}.dmg \
+            --repo ${{ github.repository }}

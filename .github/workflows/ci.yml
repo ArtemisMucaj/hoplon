@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  build-macos:
+    name: Build macOS app (arm64)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch bundled binaries
+        run: bash scripts/fetch_binaries.sh
+
+      - name: Build Xcode project
+        run: |
+          xcodebuild \
+            -project Hoplon.xcodeproj \
+            -scheme Hoplon \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            build
