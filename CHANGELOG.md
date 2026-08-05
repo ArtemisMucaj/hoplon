@@ -1,0 +1,8 @@
+# Changelog
+
+## [0.2.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.1.0...hoplon-v0.2.0) (2026-08-04)
+
+
+### Features
+
+* Hoplon, a native macOS control center for the local agent stack ([#1](https://github.com/ArtemisMucaj/hoplon/issues/1)) ([7d53e0b](https://github.com/ArtemisMucaj/hoplon/commit/7d53e0ba30c5a3506c9075bdd3a939d74744fab8))
