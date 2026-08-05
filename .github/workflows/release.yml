@@ -103,11 +103,21 @@ jobs:
           echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           # notarytool wants a zip of the .app.
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Hoplon.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/Hoplon.zip" \
-            --key "$RUNNER_TEMP/notary.p8" \
-            --key-id "$NOTARY_KEY_ID" \
-            --issuer "$NOTARY_ISSUER_ID" \
-            --wait
+          # Apple's notary service can be slow and drop the polling connection
+          # (-1009), which kills --wait. Retry so a transient blip doesn't fail
+          # the release; --timeout bounds each attempt.
+          ok=false
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$RUNNER_TEMP/Hoplon.zip" \
+              --key "$RUNNER_TEMP/notary.p8" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait --timeout 4h; then
+              ok=true; break
+            fi
+            echo "app notarize attempt $attempt failed; retrying in 30s"; sleep 30
+          done
+          [ "$ok" = true ] || { echo "app notarization failed after retries"; exit 1; }
           xcrun stapler staple "$APP"
           rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/Hoplon.zip"
 
@@ -137,11 +147,18 @@ jobs:
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
-          xcrun notarytool submit "$DMG" \
-            --key "$RUNNER_TEMP/notary.p8" \
-            --key-id "$NOTARY_KEY_ID" \
-            --issuer "$NOTARY_ISSUER_ID" \
-            --wait
+          ok=false
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$DMG" \
+              --key "$RUNNER_TEMP/notary.p8" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait --timeout 4h; then
+              ok=true; break
+            fi
+            echo "dmg notarize attempt $attempt failed; retrying in 30s"; sleep 30
+          done
+          [ "$ok" = true ] || { echo "dmg notarization failed after retries"; exit 1; }
           xcrun stapler staple "$DMG"
           rm -f "$RUNNER_TEMP/notary.p8"
 

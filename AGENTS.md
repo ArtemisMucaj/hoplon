@@ -81,7 +81,7 @@ Per-binary, if you need one in particular:
 bash scripts/download_panoply_binary.sh      # pinned release + SHA-256 verify
 bash scripts/download_guardrails_binary.sh
 bash scripts/download_codesearch_binary.sh   # pinned release (v2.0.0) + SHA-256 verify
-bash scripts/download_memory_binary.sh       # pinned release (v0.2.1) + SHA-256 verify
+bash scripts/download_memory_binary.sh       # pinned release (v0.2.4) + SHA-256 verify
 bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the fallback path)
 bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the fallback path)
 bash scripts/build_panoply_binary.sh         # builds from ../panoply
@@ -90,7 +90,7 @@ bash scripts/build_panoply_binary.sh         # builds from ../panoply
 All four binaries now ship as pinned release assets, so `fetch_binaries.sh`
 downloads each and falls back to a sibling build only if the download fails.
 codesearch is pinned to v2.0.0 (the post-extraction build — memory moved to
-memory-rs, LLM stack to openai-rs) and memory-rs to v0.2.1. Both download
+memory-rs, LLM stack to openai-rs) and memory-rs to v0.2.4. Both download
 scripts fail closed if a pin points at an asset that predates the feature the
 app drives it with.
 
