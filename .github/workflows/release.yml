@@ -27,11 +27,42 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: macos-26
+    env:
+      APP: build/DerivedData/Build/Products/Release/Hoplon.app
+      DMG: dist/Hoplon-${{ needs.release-please.outputs.tag_name }}.dmg
     steps:
       - uses: actions/checkout@v4
 
       - name: Fetch bundled binaries
         run: bash scripts/fetch_binaries.sh
+
+      # Import the Developer ID Application cert into a throwaway keychain so
+      # xcodebuild can sign with it. Everything is torn down in the final step.
+      - name: Import signing certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Make the temp keychain visible to codesign/xcodebuild.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          # Resolve the signing identity name for later steps.
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Build Xcode project
         run: |
@@ -40,15 +71,55 @@ jobs:
             -scheme Hoplon \
             -configuration Release \
             -derivedDataPath build/DerivedData \
-            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_IDENTITY="$SIGN_IDENTITY" \
+            CODE_SIGN_STYLE=Manual \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
             build
 
-      - name: Ad-hoc sign the app
+      # Sign every nested executable first, then the app itself. Apple checks
+      # nested code during notarization, and --deep is deprecated/unreliable, so
+      # sign each of the four bundled service binaries explicitly.
+      - name: Sign bundled binaries and app
         run: |
-          codesign --force --deep --sign - \
-            "build/DerivedData/Build/Products/Release/Hoplon.app"
+          for bin in panoply guardrail memory-rs codesearch; do
+            codesign --force --timestamp --options runtime \
+              --keychain "$KEYCHAIN" --sign "$SIGN_IDENTITY" \
+              "$APP/Contents/Resources/$bin"
+          done
+          codesign --force --timestamp --options runtime \
+            --entitlements Hoplon/Hoplon.entitlements \
+            --keychain "$KEYCHAIN" --sign "$SIGN_IDENTITY" \
+            "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+      - name: Notarize app
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          # notarytool wants a zip of the .app.
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Hoplon.zip"
+          # Apple's notary service can be slow and drop the polling connection
+          # (-1009), which kills --wait. Retry so a transient blip doesn't fail
+          # the release; --timeout bounds each attempt.
+          ok=false
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$RUNNER_TEMP/Hoplon.zip" \
+              --key "$RUNNER_TEMP/notary.p8" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait --timeout 4h; then
+              ok=true; break
+            fi
+            echo "app notarize attempt $attempt failed; retrying in 30s"; sleep 30
+          done
+          [ "$ok" = true ] || { echo "app notarization failed after retries"; exit 1; }
+          xcrun stapler staple "$APP"
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/Hoplon.zip"
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -64,13 +135,41 @@ jobs:
             --icon "Hoplon.app" 175 190 \
             --hide-extension "Hoplon.app" \
             --app-drop-link 425 190 \
-            "dist/Hoplon-${{ needs.release-please.outputs.tag_name }}.dmg" \
-            "build/DerivedData/Build/Products/Release/Hoplon.app"
+            "$DMG" \
+            "$APP"
+
+      # Notarize the DMG too and staple it, so the downloaded container passes
+      # Gatekeeper offline on first open.
+      - name: Notarize DMG
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$NOTARY_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ok=false
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$DMG" \
+              --key "$RUNNER_TEMP/notary.p8" \
+              --key-id "$NOTARY_KEY_ID" \
+              --issuer "$NOTARY_ISSUER_ID" \
+              --wait --timeout 4h; then
+              ok=true; break
+            fi
+            echo "dmg notarize attempt $attempt failed; retrying in 30s"; sleep 30
+          done
+          [ "$ok" = true ] || { echo "dmg notarization failed after retries"; exit 1; }
+          xcrun stapler staple "$DMG"
+          rm -f "$RUNNER_TEMP/notary.p8"
 
       - name: Upload DMG to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload ${{ needs.release-please.outputs.tag_name }} \
-            dist/Hoplon-${{ needs.release-please.outputs.tag_name }}.dmg \
-            --repo ${{ github.repository }}
+            "$DMG" --repo ${{ github.repository }}
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true

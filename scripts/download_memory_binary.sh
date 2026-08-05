@@ -7,7 +7,7 @@ set -euo pipefail
 # Override the pin with:
 #   MEMORY_VERSION=latest bash scripts/download_memory_binary.sh
 
-MEMORY_VERSION="${MEMORY_VERSION:-v0.2.1}"
+MEMORY_VERSION="${MEMORY_VERSION:-v0.2.4}"
 MEMORY_ASSET="${MEMORY_ASSET:-memory-rs-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"
