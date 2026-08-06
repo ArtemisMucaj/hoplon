@@ -208,10 +208,17 @@ struct SidebarView: View {
         .help(namespace)
     }
 
-    /// One nested proxied-server row under Proxy, with its live tool count.
+    /// One nested proxied-server row under Proxy. Shows the live tool count once
+    /// discovered; while none are discovered (discovery pending, OAuth not done,
+    /// or the backend is unreachable) it shows a warning dot instead, so a
+    /// configured-but-not-connected server is visible rather than absent.
     @ViewBuilder
     private func proxyServerRow(_ name: String) -> some View {
         let toolCount = state.discoveredTools[name]?.count ?? 0
+        // `discoveredTools[name]` is present-but-empty once a probe completed
+        // with zero tools; absent means "not discovered yet / failed".
+        let discovered = state.discoveredTools[name] != nil
+        let needsAuth = state.servers[name]?.isOAuth ?? false
         HStack(spacing: 8) {
             Image(systemName: "circle.grid.2x1.fill")
                 .font(.system(size: 6))
@@ -224,12 +231,31 @@ struct SidebarView: View {
                 Text("\(toolCount)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
+            } else if !discovered {
+                // Not connected yet — amber for OAuth (actionable: sign in),
+                // grey otherwise (pending / unreachable).
+                Image(systemName: needsAuth ? "lock.fill" : "exclamationmark.circle")
+                    .font(.system(size: 9))
+                    .foregroundStyle(needsAuth ? .orange : .secondary)
             }
         }
         .padding(.leading, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .tag(SidebarItem.proxyServer(name))
-        .help("\(name) · \(toolCount) tool\(toolCount == 1 ? "" : "s")")
+        .help(rowHelp(name: name, toolCount: toolCount, discovered: discovered, needsAuth: needsAuth))
+    }
+
+    private func rowHelp(name: String, toolCount: Int, discovered: Bool, needsAuth: Bool) -> String {
+        if toolCount > 0 {
+            return "\(name) · \(toolCount) tool\(toolCount == 1 ? "" : "s")"
+        }
+        if needsAuth {
+            return "\(name) · needs authentication (OAuth not completed)"
+        }
+        if !discovered {
+            return "\(name) · not connected (discovery pending or backend unreachable)"
+        }
+        return "\(name) · no tools"
     }
 
     /// One nested namespace row under Memory — opens that namespace's projects.
