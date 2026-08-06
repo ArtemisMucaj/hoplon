@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.2.2...hoplon-v0.3.0) (2026-08-06)
+
+
+### Features
+
+* install codesearch/memory-rs CLIs into ~/.local/bin ([#10](https://github.com/ArtemisMucaj/hoplon/issues/10)) ([e787097](https://github.com/ArtemisMucaj/hoplon/commit/e787097cf5f32836e0216b0a1911fe54d167506d))
+
 ## [0.2.2](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.2.1...hoplon-v0.2.2) (2026-08-06)
 
 
