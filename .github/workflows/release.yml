@@ -84,7 +84,17 @@ jobs:
       - name: Sign bundled binaries and app
         run: |
           for bin in panoply guardrail memory-rs codesearch; do
+            # panoply is a PyInstaller --onefile bundle: it unpacks an embedded
+            # Python.framework (signed under a different Team ID) at launch and
+            # dlopen()s it. Without disable-library-validation the hardened
+            # runtime rejects that load ("different Team IDs") and it crashes.
+            # The Rust binaries are single static Mach-Os and need no entitlements.
+            entitlements=()
+            if [ "$bin" = "panoply" ]; then
+              entitlements=(--entitlements Hoplon/Panoply.entitlements)
+            fi
             codesign --force --timestamp --options runtime \
+              "${entitlements[@]}" \
               --keychain "$KEYCHAIN" --sign "$SIGN_IDENTITY" \
               "$APP/Contents/Resources/$bin"
           done
