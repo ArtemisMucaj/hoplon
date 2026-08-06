@@ -270,9 +270,21 @@ final class AppState {
     /// nested "Proxy ▸ server" rows reflect what's live, not just what's in the
     /// config file. Empty while the proxy is stopped. A configured-but-disabled
     /// server never gets probed, so it never appears here.
+    /// Names of the servers configured in servers.json, for the sidebar.
+    ///
+    /// Sourced from the *config* (`servers`), not from `discoveredTools`: a
+    /// server the user configured should be visible whether or not its tools
+    /// have been discovered yet (discovery can be pending, or blocked on OAuth /
+    /// an unreachable backend). Disabled servers (`enabled: false`) are hidden,
+    /// matching what the proxy actually serves. Tool counts and a reachability
+    /// hint are layered on in the row, keyed by whether `discoveredTools` has an
+    /// entry for the name.
     var proxiedServerNames: [String] {
         guard proxyManager.isRunning else { return [] }
-        return discoveredTools.keys.sorted()
+        return servers
+            .filter { $0.value.enabled ?? true }
+            .keys
+            .sorted()
     }
 
     // MARK: - Config URL
