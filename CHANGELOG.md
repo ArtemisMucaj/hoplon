@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.3.0...hoplon-v0.3.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* list configured MCP servers in the sidebar, not just discovered ones ([#12](https://github.com/ArtemisMucaj/hoplon/issues/12)) ([a04ccc3](https://github.com/ArtemisMucaj/hoplon/commit/a04ccc32a4bcb4b44dcce2121b7271dd69843bbd))
+* release 0.3.1 with the sidebar server-list fix ([#14](https://github.com/ArtemisMucaj/hoplon/issues/14)) ([b8dfb5a](https://github.com/ArtemisMucaj/hoplon/commit/b8dfb5a3e63e6566991375b008b3cada31bcb714))
+
 ## [0.3.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.2.2...hoplon-v0.3.0) (2026-08-06)
 
 
