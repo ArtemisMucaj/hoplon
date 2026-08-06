@@ -88,6 +88,7 @@ enum SettingsItem: Hashable {
     case service(AppSection)
     case memoryPane(MemoryPane)
     case codePane(CodePane)
+    case commandLine
 }
 
 /// The Code Intelligence settings sub-panes.
@@ -163,6 +164,13 @@ struct SettingsView: View {
                         ForEach(CodePane.allCases) { pane in
                             codePaneRow(pane)
                         }
+                    }
+                    Section("Tools") {
+                        HStack {
+                            Label("Command Line", systemImage: "terminal")
+                            Spacer()
+                        }
+                        .tag(SettingsItem.commandLine)
                     }
                 }
                 .listStyle(.sidebar)
@@ -246,6 +254,7 @@ struct SettingsView: View {
         case .memoryPane(.dream):   MemoryDreamPane()
         case .codePane(.process):   CodeProcessPane()
         case .codePane(.llm):       CodeLlmPane()
+        case .commandLine:          CommandLinePane()
         case nil:                   ContentUnavailableView("Select a Setting", systemImage: "gearshape")
         }
     }
@@ -512,5 +521,105 @@ private struct CodeLlmPane: View {
             }
         }
         .navigationTitle("LLM")
+    }
+}
+
+// MARK: - Tools: Command Line pane
+
+/// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs CLIs
+/// so they're runnable from a terminal. The links point into the app bundle, so
+/// they track the current binary but go stale if the app is moved — the pane
+/// surfaces that and offers one-click repair.
+private struct CommandLinePane: View {
+    @Environment(AppState.self) var state
+    private var manager: CliLinkManager { state.cliLinkManager }
+
+    var body: some View {
+        Form {
+            Section("Command-Line Tools") {
+                Text("Install `\(CliLinkManager.tools.map(\.commandName).joined(separator: "` and `"))` into \(manager.binDirectoryPath) so you can run them from a terminal. The links point at this app's bundled binaries.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(CliLinkManager.tools) { tool in
+                    toolRow(tool)
+                }
+
+                HStack {
+                    Button("Install All") { manager.installAll() }
+                    Button("Remove All") { manager.removeAll() }
+                    Spacer()
+                }
+            }
+
+            if !manager.binDirOnPath {
+                Section("PATH") {
+                    Label("\(manager.binDirectoryPath) isn't on your PATH, so the commands won't be found until you add it.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                    HStack {
+                        Text(manager.pathExportLine)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button {
+                            copyToPasteboard(manager.pathExportLine)
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                    }
+                    Text("Add this line to your shell profile (e.g. ~/.zshrc), then open a new terminal.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            if let error = manager.lastError {
+                Section {
+                    Label(error, systemImage: "xmark.octagon.fill")
+                        .font(.caption).foregroundStyle(.red)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Command Line")
+        .onAppear { manager.refresh() }
+    }
+
+    @ViewBuilder
+    private func toolRow(_ tool: CliLinkManager.Tool) -> some View {
+        let installed = manager.states[tool.commandName] == .linked
+        LabeledContent {
+            Toggle("", isOn: Binding(
+                get: { installed },
+                set: { on in on ? manager.install(tool) : manager.remove(tool) }
+            ))
+            .labelsHidden()
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tool.commandName).font(.body)
+                switch manager.states[tool.commandName] {
+                case .linked:
+                    Text("Installed").font(.caption).foregroundStyle(.green)
+                case .stale(let reason):
+                    Text(reason).font(.caption).foregroundStyle(.orange)
+                case .notLinked, .none:
+                    Text("Not installed").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        // Stale links (wrong target / leftover from a moved app) get an explicit
+        // repair affordance — flipping the toggle would also work, but naming it
+        // "Repair" tells the user what happened.
+        if case .stale = manager.states[tool.commandName] {
+            HStack {
+                Spacer()
+                Button("Repair Link") { manager.install(tool) }
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
     }
 }

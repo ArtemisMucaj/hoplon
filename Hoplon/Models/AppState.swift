@@ -78,6 +78,9 @@ final class AppState {
     let guardrailsManager: GuardrailsManager
     let memoryManager: MemoryManager
     let codesearchManager: CodesearchManager
+    /// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs
+    /// CLIs. No process to supervise, so it needs no start/stop wiring.
+    let cliLinkManager = CliLinkManager()
     var discoveredTools: [String: [DiscoveredTool]] = [:]
     var isDiscoveringTools = false
     var presets: [Preset] = []
