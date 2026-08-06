@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.2.1...hoplon-v0.2.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* sign bundled panoply with library-validation disabled ([#8](https://github.com/ArtemisMucaj/hoplon/issues/8)) ([c7c3ddc](https://github.com/ArtemisMucaj/hoplon/commit/c7c3ddc35cb820864c0d1258a50e0bf608d10f49))
+
 ## [0.2.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.2.0...hoplon-v0.2.1) (2026-08-06)
 
 
