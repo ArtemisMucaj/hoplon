@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.3.1...hoplon-v0.4.0) (2026-08-07)
+
+
+### Features
+
+* ship the codesearch v2.0.1 pin ([#16](https://github.com/ArtemisMucaj/hoplon/issues/16)) ([3052b1d](https://github.com/ArtemisMucaj/hoplon/commit/3052b1d92f51df4d940d89ce78c6d8530ca0c3e5))
+
 ## [0.3.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.3.0...hoplon-v0.3.1) (2026-08-06)
 
 
