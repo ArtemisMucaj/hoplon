@@ -4,9 +4,8 @@ set -euo pipefail
 # Local-dev alternative to download_codesearch_binary.sh: builds `codesearch`
 # from a sibling checkout and drops it in Hoplon/Resources/.
 #
-# This is currently the path to use — the version the app targets (memory
-# subsystem extracted into memory-rs, LLM stack on openai-rs) is not released
-# yet, so the published assets are the wrong shape.
+# The pinned release (v2.0.1) is the normal path; this is the fallback when the
+# download fails, or when you need unreleased work from a local checkout.
 #
 #   CODESEARCH_REPO=../codesearch   where to build from
 #   CODESEARCH_BIN=/path/to/binary  reuse a prebuilt binary, skip the cargo build

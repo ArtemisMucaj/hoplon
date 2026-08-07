@@ -48,10 +48,10 @@ bash scripts/fetch_binaries.sh
 xcodebuild -project Hoplon.xcodeproj -scheme Hoplon -configuration Debug build
 ```
 
-Downloads are pinned to a release and SHA-256 verified against its manifest.
-memory-rs and codesearch are built from sibling checkouts instead — memory-rs
-has no published assets, and codesearch's post-extraction build isn't released
-yet. Clone both beside this repo, or set `MEMORY_REPO` / `CODESEARCH_REPO`.
+Downloads are pinned to a release and SHA-256 verified against its manifest —
+codesearch to v2.0.1, memory-rs to v0.2.4. A sibling checkout is only the
+fallback if a download fails; clone the repo beside this one, or set
+`MEMORY_REPO` / `CODESEARCH_REPO`.
 
 Requires Xcode 26.2+ and macOS 26.2+.
 
