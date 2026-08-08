@@ -30,8 +30,9 @@ enum GitProject {
     static func originURL(from start: URL) -> String? {
         var dir = start.standardizedFileURL
         while true {
-            let config = dir.appendingPathComponent(".git/config")
-            if let contents = try? String(contentsOf: config, encoding: .utf8),
+            if let gitDir = resolvedGitDir(at: dir),
+               let contents = try? String(contentsOf: gitDir.appendingPathComponent("config"),
+                                          encoding: .utf8),
                let url = parseOriginURL(contents) {
                 return url
             }
@@ -40,6 +41,50 @@ enum GitProject {
             if parent == dir { return nil }
             dir = parent
         }
+    }
+
+    /// The directory holding `config` for the repository rooted at `dir`, or nil
+    /// if `dir` is not a repository root.
+    ///
+    /// `.git` is usually a directory, but in a **linked worktree or submodule**
+    /// it is a file containing `gitdir: <path>`. Following that matters here:
+    /// without it the walk skips the real repository, keeps climbing, and either
+    /// finds the *parent* repo's remote or falls back to the folder name — a
+    /// silently wrong project name, which is the failure this whole picker
+    /// exists to avoid.
+    ///
+    /// A linked worktree's gitdir holds per-worktree state and points at the
+    /// shared repository via `commondir`; `config` lives there, so resolve it.
+    private static func resolvedGitDir(at dir: URL) -> URL? {
+        let dotGit = dir.appendingPathComponent(".git")
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+        if isDirectory.boolValue { return dotGit }
+
+        // A pointer file: `gitdir: /abs/path` or a path relative to `dir`.
+        guard let text = try? String(contentsOf: dotGit, encoding: .utf8) else { return nil }
+        guard let line = text.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") })
+        else { return nil }
+        let target = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        guard !target.isEmpty else { return nil }
+        let gitDir = target.hasPrefix("/")
+            ? URL(fileURLWithPath: target)
+            : dir.appendingPathComponent(target).standardizedFileURL
+
+        // In a linked worktree the config lives in the shared repo `commondir`
+        // points at; in a submodule the gitdir itself holds it.
+        if let common = try? String(contentsOf: gitDir.appendingPathComponent("commondir"),
+                                    encoding: .utf8) {
+            let trimmed = common.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed.hasPrefix("/")
+                    ? URL(fileURLWithPath: trimmed)
+                    : gitDir.appendingPathComponent(trimmed).standardizedFileURL
+            }
+        }
+        return gitDir
     }
 
     /// Pull `url = …` out of the `[remote "origin"]` section of a git config.

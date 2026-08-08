@@ -17,12 +17,17 @@ struct CodeOverviewView: View {
     private var stats: CodesearchStats? { manager.stats }
     private var repositories: [Repository] { manager.repositories }
 
-    /// Repositories grouped by namespace (a repo without one lands under "—"),
-    /// each group sorted by name.
-    private var namespaces: [(namespace: String, repos: [Repository])] {
-        let grouped = Dictionary(grouping: repositories) { $0.namespace ?? "—" }
+    /// Repositories grouped by namespace, each group sorted by name.
+    ///
+    /// `id` is the real namespace and `namespace` the label to show — they
+    /// differ for unscoped repositories, which group under a "—" placeholder
+    /// that is not a namespace anyone can index into.
+    private var namespaces: [(id: String?, namespace: String, repos: [Repository])] {
+        let grouped = Dictionary(grouping: repositories) { $0.namespace }
         return grouped
-            .map { (namespace: $0.key, repos: $0.value.sorted { $0.name < $1.name }) }
+            .map { (id: $0.key,
+                    namespace: $0.key ?? "—",
+                    repos: $0.value.sorted { $0.name < $1.name }) }
             .sorted { $0.namespace < $1.namespace }
     }
 
@@ -190,9 +195,16 @@ struct CodeOverviewView: View {
                     // would compete with its hit target. A context menu keeps
                     // the card a single tap target and still lets an existing
                     // namespace grow.
+                    //
+                    // Only for a real namespace: `group.namespace` is a display
+                    // label, and unscoped repositories are grouped under "—".
+                    // Indexing into that would create a namespace literally
+                    // named "—".
                     .contextMenu {
-                        Button("Add Repository…") { addRepository(to: group.namespace) }
-                            .disabled(manager.indexingPath != nil)
+                        if let real = group.id {
+                            Button("Add Repository…") { addRepository(to: real) }
+                                .disabled(manager.indexingPath != nil)
+                        }
                     }
                 }
             }
