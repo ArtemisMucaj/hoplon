@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.4.1...hoplon-v0.5.0) (2026-08-08)
+
+
+### Features
+
+* pick folders instead of typing project and repo names ([#22](https://github.com/ArtemisMucaj/hoplon/issues/22)) ([bdadea2](https://github.com/ArtemisMucaj/hoplon/commit/bdadea28c6ec1c47602481d1130f6ab0f3106a89))
+
+
+### Bug Fixes
+
+* simplify the Command Line pane ([#20](https://github.com/ArtemisMucaj/hoplon/issues/20)) ([2330df7](https://github.com/ArtemisMucaj/hoplon/commit/2330df74339453cf00b64beb5d9b113cab9b0b67))
+
 ## [0.4.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.4.0...hoplon-v0.4.1) (2026-08-08)
 
 
