@@ -49,7 +49,7 @@ xcodebuild -project Hoplon.xcodeproj -scheme Hoplon -configuration Debug build
 ```
 
 Downloads are pinned to a release and SHA-256 verified against its manifest —
-codesearch to v2.0.1, memory-rs to v0.3.0. A sibling checkout is only the
+codesearch to v2.2.0, memory-rs to v0.3.0. A sibling checkout is only the
 fallback if a download fails; clone the repo beside this one, or set
 `MEMORY_REPO` / `CODESEARCH_REPO`.
 

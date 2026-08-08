@@ -4,7 +4,7 @@ set -euo pipefail
 # Local-dev alternative to download_codesearch_binary.sh: builds `codesearch`
 # from a sibling checkout and drops it in Hoplon/Resources/.
 #
-# The pinned release (v2.0.1) is the normal path; this is the fallback when the
+# The pinned release (v2.2.0) is the normal path; this is the fallback when the
 # download fails, or when you need unreleased work from a local checkout.
 #
 #   CODESEARCH_REPO=../codesearch   where to build from
