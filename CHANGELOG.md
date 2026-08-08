@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.4.0...hoplon-v0.4.1) (2026-08-08)
+
+
+### Bug Fixes
+
+* bump memory-rs pin to v0.3.0 ([#18](https://github.com/ArtemisMucaj/hoplon/issues/18)) ([0915b5c](https://github.com/ArtemisMucaj/hoplon/commit/0915b5cd6968537c9587b3a2dd21dd613d2f89ea))
+
 ## [0.4.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.3.1...hoplon-v0.4.0) (2026-08-07)
 
 
