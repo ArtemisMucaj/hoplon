@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// One namespace: the projects it spans, and a scoped search over their
 /// memories plus the globals.
@@ -18,7 +19,6 @@ struct NamespaceDetailView: View {
     @State private var isLoading = false
     @State private var loadError: String?
 
-    @State private var newProject = ""
     @State private var actionError: String?
 
     @State private var query = ""
@@ -72,18 +72,15 @@ struct NamespaceDetailView: View {
     private var projectsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionHeader("Projects") {
-                HStack(spacing: 6) {
-                    TextField("Add project", text: $newProject)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
-                        .onSubmit { assign() }
-                    Button { assign() } label: { Label("Add", systemImage: "plus") }
-                        .buttonStyle(.borderless)
-                        .disabled(trimmedProject.isEmpty)
+                Button { pickProject() } label: {
+                    Label("Add Project", systemImage: "plus")
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Pick a repository folder; its project name comes from the git remote")
             }
 
-            Text("A project is how memory-rs names a codebase — normally its git owner/repo. Memories carrying one of these projects, plus all global memories, are in scope for this namespace.")
+            Text("Pick a repository folder and its project name is read from the git remote, the same way memory-rs names a session's codebase. Memories carrying one of these projects, plus all global memories, are in scope for this namespace.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -211,8 +208,24 @@ struct NamespaceDetailView: View {
 
     // MARK: - Actions
 
-    private var trimmedProject: String {
-        newProject.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Prompt for a repository folder and assign the project name derived from
+    /// it. Deriving beats typing here: the name has to match what memory-rs
+    /// stamps on sessions from that directory, and a typed one that doesn't
+    /// looks identical to a project that simply has no memories yet.
+    private func pickProject() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select the repository folder for this project"
+        panel.prompt = "Add Project"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        guard let project = GitProject.name(for: url) else {
+            actionError = "Couldn't derive a project name from \(url.path)."
+            return
+        }
+        assign(project)
     }
 
     private func load() async {
@@ -226,14 +239,11 @@ struct NamespaceDetailView: View {
         }
     }
 
-    private func assign() {
-        let project = trimmedProject
-        guard !project.isEmpty else { return }
+    private func assign(_ project: String) {
         actionError = nil
         Task {
             do {
                 _ = try await manager.makeClient().assignProject(project, to: namespace)
-                newProject = ""
                 await load()
                 manager.refresh()   // project counts live on the namespace list
             } catch {

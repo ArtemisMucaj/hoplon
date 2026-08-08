@@ -97,6 +97,18 @@ struct CodesearchClient {
         return try await get("/api/repositories/\(encoded)", type: RepositoryDetail.self, timeout: 30)
     }
 
+    /// `POST /api/namespaces` — create a namespace with the default embedding
+    /// config. Idempotent server-side for a matching config, so re-creating an
+    /// existing namespace is not an error.
+    func createNamespace(_ name: String) async throws {
+        _ = try await post(
+            "/api/namespaces",
+            body: CreateNamespaceRequest(name: name),
+            type: JSONValue.self,
+            timeout: 30
+        )
+    }
+
     /// `DELETE /api/repositories/{id}` — returns true on success.
     @discardableResult
     func deleteRepository(id: String) async throws -> Bool {
