@@ -528,8 +528,8 @@ private struct CodeLlmPane: View {
 
 /// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs CLIs
 /// so they're runnable from a terminal. The links point into the app bundle, so
-/// they track the current binary but go stale if the app is moved — the pane
-/// surfaces that and offers one-click repair.
+/// they track the current binary but go stale if the app is moved — each row
+/// surfaces that and its toggle repairs it.
 private struct CommandLinePane: View {
     @Environment(AppState.self) var state
     private var manager: CliLinkManager { state.cliLinkManager }
@@ -537,17 +537,11 @@ private struct CommandLinePane: View {
     var body: some View {
         Form {
             Section("Command-Line Tools") {
-                Text("Install `\(CliLinkManager.tools.map(\.commandName).joined(separator: "` and `"))` into \(manager.binDirectoryPath) so you can run them from a terminal. The links point at this app's bundled binaries.")
+                Text("Symlinked into \(manager.binDirectoryPath).")
                     .font(.caption).foregroundStyle(.secondary)
 
                 ForEach(CliLinkManager.tools) { tool in
                     toolRow(tool)
-                }
-
-                HStack {
-                    Button("Install All") { manager.installAll() }
-                    Button("Remove All") { manager.removeAll() }
-                    Spacer()
                 }
             }
 
@@ -590,7 +584,9 @@ private struct CommandLinePane: View {
         LabeledContent {
             Toggle("", isOn: Binding(
                 get: { installed },
-                set: { on in on ? manager.install(tool) : manager.remove(tool) }
+                set: { on in
+                    if on { manager.install(tool) } else { manager.remove(tool) }
+                }
             ))
             .labelsHidden()
         } label: {

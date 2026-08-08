@@ -190,17 +190,6 @@ final class CliLinkManager {
         return true
     }
 
-    /// Install all tools. Returns true only if every one succeeded.
-    @discardableResult
-    func installAll() -> Bool {
-        Self.tools.reduce(true) { ok, tool in install(tool) && ok }
-    }
-
-    @discardableResult
-    func removeAll() -> Bool {
-        Self.tools.reduce(true) { ok, tool in remove(tool) && ok }
-    }
-
     // MARK: - PATH
 
     /// The `line` a user can paste into their shell profile to put the bin dir
