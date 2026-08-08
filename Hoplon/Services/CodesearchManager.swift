@@ -23,6 +23,15 @@ class CodesearchManager {
     var stats: CodesearchStats?
     var repositories: [Repository] = []
 
+    /// Progress of a UI-driven index run: the folder being indexed and the last
+    /// stage the server reported. `nil` when nothing is indexing. Held here
+    /// rather than in a view's `@State` because the 5s status poll re-renders
+    /// the detail column and would wipe view-owned state mid-run.
+    var indexingPath: String?
+    var indexingStage: String?
+    /// Error from the last index attempt, cleared when a new one starts.
+    var indexError: String?
+
     private var process: Process?
     private var processSource: DispatchSourceProcess?
     /// Set while a user-initiated `stop()` is in flight, so the exit watcher
@@ -175,6 +184,63 @@ class CodesearchManager {
     /// Fetch `/health`, `/api/stats`, and `/api/repositories` once.
     func refresh() {
         Task { await refreshOnce() }
+    }
+
+    /// Index `folder` into `namespace`, creating the namespace first.
+    ///
+    /// Creation is a separate call because indexing alone would land the repo
+    /// in whatever namespace the server was started with unless the request
+    /// names one — and naming one the server has never seen is exactly the case
+    /// `POST /api/namespaces` exists to set up. Creating an existing namespace
+    /// is a no-op server-side, so this is safe to call for both.
+    func index(folder: URL, into namespace: String) {
+        guard indexingPath == nil else { return }   // one run at a time
+        indexingPath = folder.path
+        indexingStage = "starting"
+        indexError = nil
+
+        Task {
+            defer {
+                indexingPath = nil
+                indexingStage = nil
+            }
+            let client = makeClient()
+            do {
+                try await client.createNamespace(namespace)
+            } catch {
+                indexError = "Couldn't create namespace “\(namespace)”: \(errorText(error))"
+                return
+            }
+
+            let request = IndexStreamRequest(
+                path: folder.path,
+                name: nil,
+                namespace: namespace
+            )
+            do {
+                for try await event in client.indexStream(request) {
+                    switch event {
+                    case let .progress(stage, _):
+                        indexingStage = stage
+                    case .done:
+                        refresh()   // new repo, new counts
+                        return
+                    case let .failed(message):
+                        indexError = message
+                        return
+                    }
+                }
+                // The stream ended without a terminal frame: the server closed
+                // the connection mid-run. Say so rather than reporting success.
+                indexError = "Indexing ended without completing."
+            } catch {
+                indexError = errorText(error)
+            }
+        }
+    }
+
+    private func errorText(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private func refreshOnce() async {

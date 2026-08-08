@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Code Intelligence landing overview: index-wide stats plus the indexed
 /// namespaces shown as a grid of clickable squares. This is what the section
@@ -34,6 +35,12 @@ struct CodeOverviewView: View {
     /// opens the community graph. The two entry points don't cross-select.
     @State private var openedNamespace: String?
 
+    /// Naming a new namespace. The name is free text (it is a DuckDB schema
+    /// name, not a path), but the *folder* that follows is picked — that is
+    /// where a typo would silently index nothing.
+    @State private var isNamingNamespace = false
+    @State private var newNamespaceName = ""
+
     var body: some View {
         Group {
             if let ns = openedNamespace {
@@ -50,6 +57,58 @@ struct CodeOverviewView: View {
         // the section root) leaves this landing overview — drop the drilled
         // Overview so returning here shows the grid, not a stale page.
         .onChange(of: nav.sidebarSelection) { _, _ in openedNamespace = nil }
+        .sheet(isPresented: $isNamingNamespace) { namespaceNameSheet }
+    }
+
+    /// Name the namespace, then pick the first repository folder for it. The
+    /// namespace is created as part of indexing, so an empty one is never left
+    /// behind if the user cancels at the folder step.
+    private var namespaceNameSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New namespace").font(.headline)
+            Text("A namespace groups repositories that belong to one effort, so search and graphs can span them together.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Name", text: $newNamespaceName)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { confirmNewNamespace() }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { isNamingNamespace = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Choose Folder…") { confirmNewNamespace() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedNamespace.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private var trimmedNamespace: String {
+        newNamespaceName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func confirmNewNamespace() {
+        let name = trimmedNamespace
+        guard !name.isEmpty else { return }
+        isNamingNamespace = false
+        addRepository(to: name)
+    }
+
+    /// Prompt for a repository folder and index it into `namespace`.
+    private func addRepository(to namespace: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select the repository folder to index into “\(namespace)”"
+        panel.prompt = "Index"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        manager.index(folder: url, into: namespace)
     }
 
     private var landing: some View {
@@ -83,12 +142,40 @@ struct CodeOverviewView: View {
 
     @ViewBuilder
     private var namespacesSection: some View {
-        SectionHeader("Indexed namespaces")
+        SectionHeader("Indexed namespaces") {
+            Button { newNamespaceName = "" ; isNamingNamespace = true } label: {
+                Label("New Namespace", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(manager.indexingPath != nil)
+        }
+
+        if let path = manager.indexingPath {
+            CardContainer {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Indexing \((path as NSString).lastPathComponent)")
+                            .font(.callout)
+                        Text(manager.indexingStage ?? "working")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+            }
+        }
+
+        if let error = manager.indexError {
+            Text(error).font(.caption).foregroundStyle(.red)
+        }
+
         if repositories.isEmpty {
             EmptyStateView(
                 icon: "tray",
                 title: "Nothing indexed yet",
-                message: "Index a repository with codesearch to see it here."
+                message: "Create a namespace, then add the repository folders it should cover."
             )
             .frame(maxWidth: .infinity, minHeight: 160)
         } else {
@@ -99,6 +186,14 @@ struct CodeOverviewView: View {
                         repos: group.repos,
                         onOpen: { openedNamespace = group.namespace }
                     )
+                    // The square is one big button, so an inline add control
+                    // would compete with its hit target. A context menu keeps
+                    // the card a single tap target and still lets an existing
+                    // namespace grow.
+                    .contextMenu {
+                        Button("Add Repository…") { addRepository(to: group.namespace) }
+                            .disabled(manager.indexingPath != nil)
+                    }
                 }
             }
         }

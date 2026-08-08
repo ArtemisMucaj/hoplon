@@ -757,7 +757,18 @@ struct LlmUpsertEndpointRequest: Codable {
 struct IndexStreamRequest: Codable {
     var path: String
     var name: String?
+    /// Namespace to index into. Omitted, the server uses the one `serve` was
+    /// started with — which is why creating a namespace and then indexing into
+    /// it needs this field rather than a restart.
+    var namespace: String?
     var force: Bool = false
+}
+
+/// JSON body for `POST /api/namespaces`. Only `name` is sent: the embedding
+/// target, model and dimensions all have server-side defaults, and pinning them
+/// from the app would strand the namespace if those defaults ever change.
+nonisolated struct CreateNamespaceRequest: Codable {
+    var name: String
 }
 
 /// JSON body for `POST /api/stream/explain/{symbol}`. All fields optional —
