@@ -118,7 +118,7 @@ struct MemoryOverviewView: View {
         }
 
         if let actionError {
-            Text(actionError).font(.caption).foregroundStyle(.red)
+            ErrorCard(message: actionError)
         }
 
         if manager.namespaces.isEmpty {
@@ -155,9 +155,7 @@ struct MemoryOverviewView: View {
 
             // The sheet stays open on failure, so the reason has to show here.
             if let actionError {
-                Text(actionError)
-                    .font(.caption).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+                ErrorCard(message: actionError)
             }
 
             HStack {
@@ -197,7 +195,14 @@ struct MemoryOverviewView: View {
         Task {
             defer { isCreating = false }
             do {
-                _ = try await manager.makeClient().createNamespace(name)
+                // The server answers `{"created": false}` for a refusal it does
+                // not treat as an error (a name that already exists). Closing the
+                // sheet and navigating on that would report success for a
+                // namespace that was never made.
+                guard try await manager.makeClient().createNamespace(name) else {
+                    actionError = "Couldn't create “\(name)” — a namespace with that name may already exist."
+                    return
+                }
                 isNamingNamespace = false
                 newNamespace = ""
                 manager.refresh()

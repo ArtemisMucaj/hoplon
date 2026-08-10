@@ -115,9 +115,7 @@ struct CodeOverviewView: View {
             // common case), so the reason has to be visible here — the landing
             // page's copy of it is behind this sheet.
             if let error = manager.namespaceError {
-                Text(error)
-                    .font(.caption).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
+                ErrorCard(message: error)
             }
 
             HStack {
@@ -278,7 +276,11 @@ struct CodeOverviewView: View {
             ErrorCard(message: error)
         }
 
-        if repositories.isEmpty {
+        // Keyed on the namespaces, not the repositories: a namespace created but
+        // not yet indexed into has no repositories, and testing those would hide
+        // every card behind the empty state — the exact case this screen exists
+        // to make visible.
+        if namespaces.isEmpty {
             EmptyStateView(
                 icon: "tray",
                 title: "Nothing indexed yet",

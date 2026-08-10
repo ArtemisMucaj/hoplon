@@ -349,7 +349,11 @@ class CodesearchManager {
         // one happened to be listed first. Left to inherit, it lands on the same
         // large model as everything else and takes minutes (or starves behind
         // another service's queue on the same server).
-        if let small = smallestModel(among: models), small != models.first {
+        // Bind unconditionally, even when the smallest model is the one already
+        // registered as the endpoint default: an inherited binding follows the
+        // active model, so a later switch to a large model would silently move
+        // community naming onto it.
+        if let small = smallestModel(among: models) {
             _ = try? await client.setLlmUsage("label_communities", endpoint: "LM Studio", model: small)
             print("✓ Bound community naming to \(small) (smallest of \(models.count) model(s))")
         }

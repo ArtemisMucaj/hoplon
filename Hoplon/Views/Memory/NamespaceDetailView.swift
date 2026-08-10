@@ -37,7 +37,7 @@ struct NamespaceDetailView: View {
                     projectsSection
                     resultsSection
                     if let actionError {
-                        Text(actionError).font(.caption).foregroundStyle(.red)
+                        ErrorCard(message: actionError)
                     }
                 }
                 .padding(20)
@@ -265,9 +265,17 @@ struct NamespaceDetailView: View {
     /// says so — the same trash icon meaning "you lose the index" in one section
     /// and "you lose a grouping" in the other would be a trap otherwise.
     private func deleteNamespace() {
+        // Name what is being given up, the way Code Intelligence names its
+        // repository count — "only the grouping is removed" is reassuring, but
+        // it doesn't say how much grouping.
+        let projectCount = detail?.projects.count ?? 0
+        let scope = projectCount == 1
+            ? "Its 1 project and that project's memories are kept"
+            : "Its \(projectCount) projects and their memories are kept"
+
         let alert = NSAlert()
         alert.messageText = "Delete the namespace “\(namespace)”?"
-        alert.informativeText = "Its projects and their memories are kept — only the grouping is removed."
+        alert.informativeText = "\(scope) — only the grouping is removed."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")
@@ -279,7 +287,12 @@ struct NamespaceDetailView: View {
         Task {
             defer { isDeleting = false }
             do {
-                _ = try await manager.makeClient().deleteNamespace(namespace)
+                // A `{"deleted": false}` is a refusal, not an error — navigating
+                // away on it would claim a deletion that never happened.
+                guard try await manager.makeClient().deleteNamespace(namespace) else {
+                    actionError = "The server didn't delete “\(namespace)”. It may already be gone — try refreshing."
+                    return
+                }
                 manager.refresh()
                 // This page's namespace is gone — go back to the Memory landing.
                 nav.sidebarSelection = .section(.memory)

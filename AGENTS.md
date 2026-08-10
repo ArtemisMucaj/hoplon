@@ -182,7 +182,7 @@ effort; codesearch namespaces group *indexed repositories*. `NavigationModel`
 keeps them in separate fields (`selectedMemoryNamespace` /
 `selectedCodeNamespace`) so drilling into one never cross-selects the other.
 
-Both are now created **empty** and filled afterwards, which is the same shape in
+Both are now created **empty** and filled afterward, which is the same shape in
 each section: name it, then add projects/repositories from its detail page. For
 Code Intelligence that meant a codesearch API addition — the app used to derive
 the namespace list by grouping `/api/repositories` by namespace, which cannot
