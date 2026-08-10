@@ -182,6 +182,63 @@ effort; codesearch namespaces group *indexed repositories*. `NavigationModel`
 keeps them in separate fields (`selectedMemoryNamespace` /
 `selectedCodeNamespace`) so drilling into one never cross-selects the other.
 
+Both are now created **empty** and filled afterwards, which is the same shape in
+each section: name it, then add projects/repositories from its detail page. For
+Code Intelligence that meant a codesearch API addition — the app used to derive
+the namespace list by grouping `/api/repositories` by namespace, which cannot
+represent a namespace with nothing in it, so creating one had to be a side
+effect of indexing a folder. Three codesearch endpoints back the current UI:
+
+| Route | Backs |
+|---|---|
+| `GET /api/namespaces` | the namespace list, **including empty ones** |
+| `POST /api/namespaces` | "New Namespace" (already existed) |
+| `DELETE /api/namespaces/{name}` | the trash button on a namespace page |
+
+`CodesearchManager.namespaces` holds the `GET` result and the views union it
+with the groups the repositories imply — the union matters because the server
+list has no entry for the "—" bucket of unscoped repositories, and the
+repository grouping has no entry for an empty namespace.
+
+**The delete cascades.** It removes every repository in the namespace along with
+its chunks, embeddings, call graph and cached analyses, so the app confirms with
+an `NSAlert` naming the repository count before sending it. An empty namespace
+also has no graph to draw, so `CodeDetailView` routes a sidebar selection for one
+to the overview's namespace page (which carries "Index Project") instead of
+`NamespaceGraphView`.
+
+**The two sections deliberately share one shape**, so neither teaches a flow the
+other breaks: a `New Namespace` sheet (same title, same `Create` button), a grid
+of clickable squares, and a detail page whose header is back-chevron → name →
+primary action → trash. Only the confirmation text differs, because the two
+deletes are not the same operation — a memory namespace groups projects, so
+removing it destroys nothing, while a code namespace owns its index. The same
+trash icon meaning "you lose a grouping" in one section and "you lose hours of
+indexing" in the other would be a trap.
+
+## Errors are summarised, not dumped
+
+`ErrorCard` (in `DesignSystem.swift`) renders a service failure as its first line
+plus **Show more**, with the full text copyable and the expanded view bounded to
+220pt. This exists because a failed index can carry a Node out-of-memory dump —
+a GC log plus a native stack trace, hundreds of lines — and rendering that raw
+turned the whole pane into a wall of red with the real cause lost inside it.
+Prefer it over a bare `Text(error)` for anything a service produced.
+
+## Community naming picks the smallest model
+
+`CodesearchManager.autodetectLlmEndpointIfNeeded` registers a local
+OpenAI-compatible server on first run, and then binds the `label_communities`
+usage to the **smallest** model that server advertises (parsed from the `<n>b` in
+the model id) rather than letting it inherit the active one.
+
+Naming is one LLM call per community — dozens on a real repository — so it wants
+the fastest model available. Left to inherit, it lands on the same large model as
+everything else, and on a shared local server it also queues behind whatever else
+is using it (memory-rs's dream cycle, for one). The size parse is a heuristic: an
+id with no parseable size is skipped, and the binding is left alone if none can
+be read.
+
 ## LLM configuration is per-service, on purpose
 
 Each service owns its own endpoints, in its own `config.json`, driven by its own

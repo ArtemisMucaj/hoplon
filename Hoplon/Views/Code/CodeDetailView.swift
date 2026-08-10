@@ -44,13 +44,16 @@ struct CodeDetailView: View {
                     // Stable .id so the 5s status poll re-rendering this view
                     // can't re-create the child and restart its loads.
                     Group {
-                        if let ns = nav.selectedCodeNamespace {
-                            NamespaceGraphView(
-                                namespace: ns,
-                                repos: manager.repositories.filter { ($0.namespace ?? "—") == ns }
-                            )
-                            .id("code.graph.\(ns)")
+                        if let ns = nav.selectedCodeNamespace,
+                           case let repos = manager.repositories.filter({ ($0.namespace ?? "—") == ns }),
+                           !repos.isEmpty {
+                            NamespaceGraphView(namespace: ns, repos: repos)
+                                .id("code.graph.\(ns)")
                         } else {
+                            // Also the empty-namespace case: there is no graph to
+                            // draw until something is indexed, so fall through to
+                            // the overview, whose namespace page carries the
+                            // "Index Project" action that fixes exactly that.
                             CodeOverviewView().id("code.overview")
                         }
                     }

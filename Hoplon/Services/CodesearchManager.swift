@@ -23,6 +23,19 @@ class CodesearchManager {
     var stats: CodesearchStats?
     var repositories: [Repository] = []
 
+    /// Configured namespaces, from `GET /api/namespaces`. Kept separate from
+    /// `repositories` because a namespace with nothing indexed into it appears
+    /// only here — grouping repositories by namespace can't show an empty one,
+    /// which is exactly the state a just-created namespace is in.
+    var namespaces: [CodeNamespace] = []
+
+    /// Name of the namespace currently being deleted, so the row can show
+    /// progress and block a second delete. A cascading delete on a large index
+    /// takes real time.
+    var deletingNamespace: String?
+    /// Error from the last create/delete attempt.
+    var namespaceError: String?
+
     /// Progress of a UI-driven index run: the folder being indexed and the last
     /// stage the server reported. `nil` when nothing is indexing. Held here
     /// rather than in a view's `@State` because the 5s status poll re-renders
@@ -177,6 +190,7 @@ class CodesearchManager {
         health = nil
         stats = nil
         repositories = []
+        namespaces = []
     }
 
     // MARK: - Polling
@@ -186,13 +200,49 @@ class CodesearchManager {
         Task { await refreshOnce() }
     }
 
-    /// Index `folder` into `namespace`, creating the namespace first.
+    /// Create an empty namespace.
+    ///
+    /// Creation is deliberately separate from indexing: a namespace is a
+    /// container the user fills afterwards from its detail view, so naming one
+    /// no longer forces an immediate folder choice.
+    func createNamespace(_ name: String) async -> Bool {
+        namespaceError = nil
+        do {
+            try await makeClient().createNamespace(name)
+            await refreshOnce()
+            return true
+        } catch {
+            namespaceError = "Couldn't create namespace “\(name)”: \(errorText(error))"
+            return false
+        }
+    }
+
+    /// Delete `namespace` **and every repository indexed into it** (the server
+    /// cascades). Callers are expected to have confirmed with the user first.
+    func deleteNamespace(_ name: String) async -> Bool {
+        guard deletingNamespace == nil else { return false }
+        deletingNamespace = name
+        namespaceError = nil
+        defer { deletingNamespace = nil }
+        do {
+            try await makeClient().deleteNamespace(name)
+            await refreshOnce()
+            return true
+        } catch {
+            namespaceError = "Couldn't delete namespace “\(name)”: \(errorText(error))"
+            return false
+        }
+    }
+
+    /// Index `folder` into `namespace`, creating the namespace if it's new.
     ///
     /// Creation is a separate call because indexing alone would land the repo
     /// in whatever namespace the server was started with unless the request
     /// names one — and naming one the server has never seen is exactly the case
-    /// `POST /api/namespaces` exists to set up. Creating an existing namespace
-    /// is a no-op server-side, so this is safe to call for both.
+    /// `POST /api/namespaces` exists to set up. It is *not* idempotent, though,
+    /// so the namespace list gates it: since namespaces are now created empty
+    /// and filled afterwards, the common path is indexing into one that already
+    /// exists.
     func index(folder: URL, into namespace: String) {
         guard indexingPath == nil else { return }   // one run at a time
         indexingPath = folder.path
@@ -205,8 +255,15 @@ class CodesearchManager {
                 indexingStage = nil
             }
             let client = makeClient()
+            // Create the namespace only when the server doesn't already have it.
+            // `POST /api/namespaces` rejects an existing name rather than being a
+            // no-op — a namespace's embedding config is fixed at creation — so
+            // indexing into a namespace created up front would always fail here.
             do {
-                try await client.createNamespace(namespace)
+                let existing = try await client.namespaces().map(\.name)
+                if !existing.contains(namespace) {
+                    try await client.createNamespace(namespace)
+                }
             } catch {
                 indexError = "Couldn't create namespace “\(namespace)”: \(errorText(error))"
                 return
@@ -254,6 +311,7 @@ class CodesearchManager {
         }
         if let s = try? await client.stats() { stats = s }
         if let repos = try? await client.repositories() { repositories = repos }
+        if let ns = try? await client.namespaces() { namespaces = ns }
         // Once reachable, wire up a local LLM (LM Studio/vLLM) if the user
         // hasn't configured one — so community names and call-flow explanations
         // work out of the box.
@@ -285,6 +343,43 @@ class CodesearchManager {
         )
         _ = try? await client.upsertLlmEndpoint(name: "LM Studio", request)
         print("✓ Auto-registered local LLM endpoint at \(base) (\(models.count) model(s))")
+
+        // Community naming runs one call per community — dozens on a real
+        // repository — so it wants the *fastest* model available, not whichever
+        // one happened to be listed first. Left to inherit, it lands on the same
+        // large model as everything else and takes minutes (or starves behind
+        // another service's queue on the same server).
+        if let small = smallestModel(among: models), small != models.first {
+            _ = try? await client.setLlmUsage("label_communities", endpoint: "LM Studio", model: small)
+            print("✓ Bound community naming to \(small) (smallest of \(models.count) model(s))")
+        }
+    }
+
+    /// The model most likely to be fastest, by the parameter count in its name.
+    ///
+    /// Model ids conventionally carry their size (`qwen3.5-0.8b`, `gemma-4-26b`),
+    /// so the first `<n>b` in the id is a good proxy for cost. Purely a
+    /// heuristic: an id with no parseable size is skipped rather than guessed
+    /// at, and if none can be parsed the caller keeps the default.
+    private func smallestModel(among models: [String]) -> String? {
+        models
+            .compactMap { id -> (String, Double)? in
+                guard let size = parameterCount(in: id) else { return nil }
+                return (id, size)
+            }
+            .min { $0.1 < $1.1 }?
+            .0
+    }
+
+    /// Parse the parameter count (in billions) from a model id, e.g.
+    /// `qwen3.5-0.8b-mlx` → 0.8. Matches the LAST `<number>b` token so a version
+    /// number in the name (`qwen3.5`, `gemma-4`) isn't mistaken for a size.
+    private func parameterCount(in id: String) -> Double? {
+        let pattern = /([0-9]+(?:\.[0-9]+)?)b(?![a-z0-9])/
+        return id.lowercased()
+            .matches(of: pattern)
+            .compactMap { Double($0.1) }
+            .last
     }
 
     /// codesearch expects the OpenAI base *without* a trailing `/v1` (it appends
@@ -333,6 +428,7 @@ class CodesearchManager {
         health = nil
         stats = nil
         repositories = []
+        namespaces = []
         // Re-probe for a local LLM the next time it comes up.
         didAttemptLlmAutodetect = false
     }

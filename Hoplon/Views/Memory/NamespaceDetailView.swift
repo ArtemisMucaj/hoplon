@@ -20,6 +20,7 @@ struct NamespaceDetailView: View {
     @State private var loadError: String?
 
     @State private var actionError: String?
+    @State private var isDeleting = false
 
     @State private var query = ""
     @State private var results: [Memory] = []
@@ -49,14 +50,47 @@ struct NamespaceDetailView: View {
 
     // MARK: - Header
 
+    /// Title row, laid out like Code Intelligence's namespace page: back chevron,
+    /// name, then the primary action and the trash on the trailing edge. The
+    /// search field sits below it rather than beside the chevron, so the two
+    /// sections' namespace pages have the same header.
     private var header: some View {
-        HStack(spacing: 12) {
-            Button {
-                nav.sidebarSelection = .section(.memory)
-            } label: {
-                Label("Memory", systemImage: "chevron.left")
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Button {
+                    nav.sidebarSelection = .section(.memory)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .help("Back to namespaces")
+
+                Text(namespace)
+                    .font(.headline)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer()
+
+                Button { pickProject() } label: {
+                    Label("Add Project", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isDeleting)
+                .help("Pick a repository folder; its project name comes from the git remote")
+
+                Button(role: .destructive) {
+                    deleteNamespace()
+                } label: {
+                    if isDeleting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "trash")
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isDeleting)
+                .help("Delete “\(namespace)” (its projects and memories are kept)")
             }
-            .buttonStyle(.borderless)
 
             SearchBar(text: $query, prompt: "Search across \(namespace)…", isBusy: isSearching) {
                 search()
@@ -71,14 +105,9 @@ struct NamespaceDetailView: View {
     @ViewBuilder
     private var projectsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Projects") {
-                Button { pickProject() } label: {
-                    Label("Add Project", systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .help("Pick a repository folder; its project name comes from the git remote")
-            }
+            // "Add Project" lives in the page header now (beside the trash), the
+            // same place Code Intelligence puts "Index Project".
+            SectionHeader("Projects")
 
             Text("Pick a repository folder and its project name is read from the git remote, the same way memory-rs names a session's codebase. Memories carrying one of these projects, plus all global memories, are in scope for this namespace.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -226,6 +255,38 @@ struct NamespaceDetailView: View {
             return
         }
         assign(project)
+    }
+
+    /// Delete this namespace, after confirming.
+    ///
+    /// Unlike Code Intelligence's delete, this one is *not* destructive to the
+    /// contents: memory-rs namespaces only group projects, so removing one drops
+    /// the grouping and leaves every project and memory intact. The confirmation
+    /// says so — the same trash icon meaning "you lose the index" in one section
+    /// and "you lose a grouping" in the other would be a trap otherwise.
+    private func deleteNamespace() {
+        let alert = NSAlert()
+        alert.messageText = "Delete the namespace “\(namespace)”?"
+        alert.informativeText = "Its projects and their memories are kept — only the grouping is removed."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        isDeleting = true
+        actionError = nil
+        Task {
+            defer { isDeleting = false }
+            do {
+                _ = try await manager.makeClient().deleteNamespace(namespace)
+                manager.refresh()
+                // This page's namespace is gone — go back to the Memory landing.
+                nav.sidebarSelection = .section(.memory)
+            } catch {
+                actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     private func load() async {
