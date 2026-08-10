@@ -10,25 +10,27 @@ struct MemoryOverviewView: View {
 
     private var manager: MemoryManager { state.memoryManager }
 
+    /// Naming a new namespace, in a sheet — the same flow as Code Intelligence,
+    /// so both sections are created the same way rather than one inline and one
+    /// through a dialog.
+    @State private var isNamingNamespace = false
     @State private var newNamespace = ""
     @State private var isCreating = false
     @State private var actionError: String?
+
+    private let squareColumns = [GridItem(.adaptive(minimum: 200), spacing: 16)]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 statsSection
                 namespacesSection
-                if let actionError {
-                    Text(actionError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Memory")
+        .sheet(isPresented: $isNamingNamespace) { namespaceNameSheet }
     }
 
     // MARK: - Stats
@@ -97,79 +99,86 @@ struct MemoryOverviewView: View {
 
     // MARK: - Namespaces
 
+    /// Namespaces as a grid of clickable squares — the same shape as Code
+    /// Intelligence's landing, so the two sections read as one app. Opening a
+    /// square goes to that namespace's page, where its projects are managed and
+    /// it can be deleted; the grid itself carries no per-card actions.
     @ViewBuilder
     private var namespacesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader("Namespaces") {
-                HStack(spacing: 6) {
-                    TextField("New namespace", text: $newNamespace)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
-                        .onSubmit { create() }
-                    Button {
-                        create()
-                    } label: {
-                        if isCreating {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label("Add", systemImage: "plus")
-                        }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(trimmedNew.isEmpty || isCreating)
-                }
+        SectionHeader("Namespaces") {
+            Button {
+                newNamespace = ""
+                actionError = nil
+                isNamingNamespace = true
+            } label: {
+                Label("New Namespace", systemImage: "plus")
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
 
-            Text("A namespace groups projects so recall can span a multi-repo effort instead of stopping at one repository.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        if let actionError {
+            ErrorCard(message: actionError)
+        }
 
-            if manager.namespaces.isEmpty {
-                CardContainer {
-                    Text("No namespaces yet — memories are scoped per project until you group some.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                }
-            } else {
-                CardContainer {
-                    VStack(spacing: 0) {
-                        ForEach(Array(manager.namespaces.enumerated()), id: \.element.id) { idx, ns in
-                            namespaceRow(ns)
-                            if idx < manager.namespaces.count - 1 { Divider() }
-                        }
-                    }
+        if manager.namespaces.isEmpty {
+            EmptyStateView(
+                icon: "tray",
+                title: "No namespaces yet",
+                message: "Create a namespace, then add the projects whose memories it should span."
+            )
+            .frame(maxWidth: .infinity, minHeight: 160)
+        } else {
+            LazyVGrid(columns: squareColumns, spacing: 16) {
+                ForEach(manager.namespaces) { ns in
+                    MemoryNamespaceSquare(
+                        namespace: ns,
+                        onOpen: { nav.sidebarSelection = .memoryNamespace(ns.name) }
+                    )
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func namespaceRow(_ ns: MemoryNamespace) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "square.stack.3d.up.fill")
-                .foregroundStyle(.orange)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ns.name).font(.callout.weight(.medium))
-                Text("\(ns.projectCount) project\(ns.projectCount == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.secondary)
+    /// Name the namespace and create it. Mirrors Code Intelligence's sheet, down
+    /// to the button title, so neither section teaches a flow the other breaks.
+    private var namespaceNameSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New namespace").font(.headline)
+            Text("A namespace groups projects so recall can span a multi-repo effort instead of stopping at one repository. It starts empty — add projects to it from its page.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Name", text: $newNamespace)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { create() }
+
+            // The sheet stays open on failure, so the reason has to show here.
+            if let actionError {
+                ErrorCard(message: actionError)
             }
-            Spacer()
-            Button("Open") { nav.sidebarSelection = .memoryNamespace(ns.name) }
-                .buttonStyle(.borderless)
-            Button(role: .destructive) {
-                delete(ns)
-            } label: {
-                Image(systemName: "trash")
+
+            HStack {
+                Spacer()
+                Button("Cancel") { isNamingNamespace = false }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isCreating)
+                Button {
+                    create()
+                } label: {
+                    if isCreating {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Create")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmedNew.isEmpty || isCreating)
             }
-            .buttonStyle(.borderless)
-            .help("Delete “\(ns.name)” (its projects and memories are kept)")
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture { nav.sidebarSelection = .memoryNamespace(ns.name) }
+        .padding(20)
+        .frame(width: 420)
     }
 
     // MARK: - Actions
@@ -186,25 +195,81 @@ struct MemoryOverviewView: View {
         Task {
             defer { isCreating = false }
             do {
-                _ = try await manager.makeClient().createNamespace(name)
+                // The server answers `{"created": false}` for a refusal it does
+                // not treat as an error (a name that already exists). Closing the
+                // sheet and navigating on that would report success for a
+                // namespace that was never made.
+                guard try await manager.makeClient().createNamespace(name) else {
+                    actionError = "Couldn't create “\(name)” — a namespace with that name may already exist."
+                    return
+                }
+                isNamingNamespace = false
                 newNamespace = ""
                 manager.refresh()
+                // Land on the new namespace so adding its first project is
+                // the next thing in front of you.
+                nav.sidebarSelection = .memoryNamespace(name)
             } catch {
                 actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
     }
+}
 
-    private func delete(_ ns: MemoryNamespace) {
-        actionError = nil
-        Task {
-            do {
-                _ = try await manager.makeClient().deleteNamespace(ns.name)
-                if nav.selectedMemoryNamespace == ns.name { nav.selectedMemoryNamespace = nil }
-                manager.refresh()
-            } catch {
-                actionError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+// MARK: - Namespace square
+
+/// One memory namespace as a clickable square card. Deliberately the same card
+/// as Code Intelligence's `NamespaceSquare` — hover lift, accent border,
+/// pointing-hand cursor — differing only in the stat it shows (projects, not
+/// repos/files/chunks) and its accent colour, which matches the Memory section.
+private struct MemoryNamespaceSquare: View {
+    let namespace: MemoryNamespace
+    let onOpen: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .foregroundStyle(.orange)
+                    Text(namespace.name)
+                        .font(.headline)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .opacity(hovering ? 1 : 0.35)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(Format.count(namespace.projectCount))
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    Text("project\(namespace.projectCount == 1 ? "" : "s")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(hovering ? Color.accentColor : Color(nsColor: .separatorColor),
+                                  lineWidth: hovering ? 1.5 : 1)
+            )
+            .shadow(color: .black.opacity(hovering ? 0.12 : 0), radius: hovering ? 6 : 0, y: 2)
         }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .scaleEffect(hovering ? 1.01 : 1)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .help("Open \(namespace.name)")
     }
 }

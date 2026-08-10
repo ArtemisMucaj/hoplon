@@ -109,6 +109,33 @@ struct CodesearchClient {
         )
     }
 
+    /// `GET /api/namespaces` — every configured namespace, including ones with
+    /// nothing indexed into them yet. Those are invisible to `/api/repositories`,
+    /// so this is the only way a freshly created namespace can be listed.
+    func namespaces() async throws -> [CodeNamespace] {
+        try await get("/api/namespaces", type: NamespacesResponse.self, timeout: 15).namespaces
+    }
+
+    /// `DELETE /api/namespaces/{name}` — delete a namespace **and every
+    /// repository indexed into it**. Cascading server-side; there is no
+    /// non-destructive variant.
+    @discardableResult
+    func deleteNamespace(_ name: String) async throws -> Bool {
+        let encoded = encodeSegment(name)
+        var req = URLRequest(url: try url("/api/namespaces/\(encoded)"))
+        req.httpMethod = "DELETE"
+        // Cascading deletes clear the namespace's chunks, embeddings, call graph
+        // and cached analyses, which on a large index is not instant.
+        req.timeoutInterval = 120
+        let (data, response) = try await session.data(for: req)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error
+                ?? "Delete failed (HTTP \(http.statusCode))."
+            throw ClientError.http(status: http.statusCode, message: message)
+        }
+        return true
+    }
+
     /// `DELETE /api/repositories/{id}` — returns true on success.
     @discardableResult
     func deleteRepository(id: String) async throws -> Bool {

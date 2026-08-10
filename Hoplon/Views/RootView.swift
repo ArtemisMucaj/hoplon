@@ -127,10 +127,13 @@ struct SidebarView: View {
     private var codeRunning: Bool { state.codesearchManager.isRunning }
 
     /// Indexed namespaces, sorted — mirrors the landing grid's grouping so the
-    /// sidebar rows and the overview agree.
+    /// sidebar rows and the overview agree. That means the server's namespace
+    /// list (which includes ones with nothing indexed into them) unioned with
+    /// the groups the repositories imply (which covers the unscoped "—" bucket).
     private var codeNamespaces: [String] {
-        let names = state.codesearchManager.repositories.map { $0.namespace ?? "—" }
-        return Array(Set(names)).sorted()
+        let fromRepos = state.codesearchManager.repositories.map { $0.namespace ?? "—" }
+        let configured = state.codesearchManager.namespaces.map(\.name)
+        return Array(Set(fromRepos).union(configured)).sorted()
     }
 
     var body: some View {

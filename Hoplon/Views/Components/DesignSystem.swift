@@ -247,6 +247,88 @@ struct EmptyStateView: View {
     }
 }
 
+// MARK: - Error card
+
+/// A failure message that stays one or two lines until asked to expand.
+///
+/// Service errors are not all short: a failed SCIP index can carry a Node
+/// out-of-memory dump — a GC log plus a native stack trace, hundreds of lines —
+/// and rendering that raw turned the whole pane into a wall of red text with the
+/// actual cause lost inside it. So the first line leads (it's the summary the
+/// service wrote), the rest hides behind a disclosure, and the full text is
+/// always copyable for a bug report.
+struct ErrorCard: View {
+    let message: String
+    /// Shown above the message, e.g. "Indexing failed".
+    var title: String?
+
+    @State private var expanded = false
+
+    /// The service's own summary line — the part worth reading first.
+    private var firstLine: String {
+        message.split(separator: "\n", omittingEmptySubsequences: false)
+            .first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? message
+    }
+
+    private var hasDetail: Bool {
+        message.contains("\n") || message.count > 200
+    }
+
+    var body: some View {
+        CardContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let title {
+                            Text(title).font(.callout.weight(.medium))
+                        }
+                        Text(firstLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .lineLimit(expanded ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(message, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Copy the full error")
+                }
+
+                if hasDetail {
+                    Button(expanded ? "Show less" : "Show more") {
+                        expanded.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+
+                    if expanded {
+                        ScrollView {
+                            Text(message)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        // Bounded: the point is that a huge dump can't push the
+                        // rest of the page off-screen.
+                        .frame(maxHeight: 220)
+                    }
+                }
+            }
+            .padding(12)
+        }
+    }
+}
+
 // MARK: - Section header (title + trailing accessory)
 
 /// A lightweight section header used above card containers in the code brick.

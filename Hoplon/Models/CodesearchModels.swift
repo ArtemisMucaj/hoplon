@@ -771,6 +771,50 @@ nonisolated struct CreateNamespaceRequest: Codable {
     var name: String
 }
 
+/// One configured namespace from `GET /api/namespaces`.
+///
+/// The server reads these from its namespace config table rather than deriving
+/// them from indexed repositories, which is what makes a namespace with nothing
+/// in it visible — grouping `/api/repositories` by namespace can only ever show
+/// namespaces that already have a repo.
+nonisolated struct CodeNamespace: Codable, Equatable, Identifiable {
+    var name: String
+    var repositories: Int
+    var totalFiles: Int
+    var totalChunks: Int
+
+    var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case repositories
+        case totalFiles = "total_files"
+        case totalChunks = "total_chunks"
+    }
+
+    // Decoded with plain `try?` rather than the `lenient` helper: this DTO is
+    // `nonisolated` and that helper is MainActor-isolated, so calling it here
+    // warns. Same lenient behaviour, no isolation crossing.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name         = (try? c.decode(String.self, forKey: .name)) ?? ""
+        repositories = (try? c.decode(Int.self, forKey: .repositories)) ?? 0
+        totalFiles   = (try? c.decode(Int.self, forKey: .totalFiles)) ?? 0
+        totalChunks  = (try? c.decode(Int.self, forKey: .totalChunks)) ?? 0
+    }
+
+    init(name: String, repositories: Int = 0, totalFiles: Int = 0, totalChunks: Int = 0) {
+        self.name = name
+        self.repositories = repositories
+        self.totalFiles = totalFiles
+        self.totalChunks = totalChunks
+    }
+}
+
+nonisolated struct NamespacesResponse: Codable {
+    var namespaces: [CodeNamespace]
+}
+
 /// JSON body for `POST /api/stream/explain/{symbol}`. All fields optional —
 /// the server also accepts a bare POST. `llm`/`model`/`endpoint` select the
 /// chat backend per request (model ids come from `GET /api/llm/models`).
