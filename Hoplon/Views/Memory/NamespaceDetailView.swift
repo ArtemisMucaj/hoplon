@@ -88,8 +88,13 @@ struct NamespaceDetailView: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .disabled(isDeleting)
-                .help("Delete “\(namespace)” (its projects and memories are kept)")
+                // Disabled until the detail loads: the confirmation names the
+                // project count, and offering the action before that is known
+                // means either a wrong count or a silent guess.
+                .disabled(isDeleting || detail == nil)
+                .help(detail == nil
+                      ? "Loading “\(namespace)”…"
+                      : "Delete “\(namespace)” (its projects and memories are kept)")
             }
 
             SearchBar(text: $query, prompt: "Search across \(namespace)…", isBusy: isSearching) {
@@ -268,7 +273,11 @@ struct NamespaceDetailView: View {
         // Name what is being given up, the way Code Intelligence names its
         // repository count — "only the grouping is removed" is reassuring, but
         // it doesn't say how much grouping.
-        let projectCount = detail?.projects.count ?? 0
+        //
+        // The button is disabled until `detail` loads (see `header`), so this is
+        // never the "not loaded yet" case: defaulting to 0 there would have
+        // promised "its 0 projects are kept" for a namespace spanning ten.
+        guard let projectCount = detail?.projects.count else { return }
         let scope = projectCount == 1
             ? "Its 1 project and that project's memories are kept"
             : "Its \(projectCount) projects and their memories are kept"
