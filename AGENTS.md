@@ -288,6 +288,12 @@ Two wrinkles worth knowing:
 
 ## Known gaps
 
-- **No app icon.** `Assets.xcassets/AppIcon.appiconset` has the manifest but no
-  images; the menu bar falls back to an SF Symbol shield (a *hoplon* is the
-  shield a hoplite carried).
+- **No dedicated menu bar icon.** The app icon itself is done —
+  `Assets.xcassets/AppIcon.appiconset` has all ten macOS sizes and compiles to
+  `AppIcon.icns`, so the Dock, Finder and About box are covered. What's missing
+  is the separate `MenuBarIcon` asset: `menuBarIcon(dimmed:)` in `HoplonApp.swift`
+  looks one up by that name and falls back to an SF Symbol
+  `shield`/`shield.fill` when it's absent, which is what currently renders. The
+  menu bar needs its own art anyway — a 16pt template image that inverts with
+  the menu bar's appearance, not a downscaled full-colour icon. (A *hoplon* is
+  the round shield a hoplite carried, hence the glyph.)
