@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.5.0...hoplon-v0.6.0) (2026-08-11)
+
+
+### Features
+
+* **code:** create namespaces empty, and match Memory's UI to it ([#24](https://github.com/ArtemisMucaj/hoplon/issues/24)) ([8c46abe](https://github.com/ArtemisMucaj/hoplon/commit/8c46abe69b665f23f626ac8b1ba1e3337fff3dd0))
+
 ## [0.5.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.4.1...hoplon-v0.5.0) (2026-08-08)
 
 
