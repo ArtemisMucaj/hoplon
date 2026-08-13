@@ -32,5 +32,21 @@ bash "$SCRIPTS/download_codesearch_binary.sh" || {
 }
 
 echo
+echo "════ agent skills (memory-rs + codesearch) ════"
+# Vendored from each service's repo at the pinned release's commit, so the app
+# can install them into ~/.agents/skills with no network. Not fatal: a bundle
+# without them still runs, the Skills section just reports them missing.
+bash "$SCRIPTS/download_memory_skills.sh" || {
+  echo "!! skill download failed — falling back to a sibling checkout"
+  SKILLS_SOURCE_DIR="${MEMORY_REPO:-$SCRIPTS/../../memory-rs}" \
+    bash "$SCRIPTS/download_memory_skills.sh" || echo "!! no memory-rs skills bundled"
+}
+bash "$SCRIPTS/download_codesearch_skills.sh" || {
+  echo "!! skill download failed — falling back to a sibling checkout"
+  SKILLS_SOURCE_DIR="${CODESEARCH_REPO:-$SCRIPTS/../../codesearch}" \
+    bash "$SCRIPTS/download_codesearch_skills.sh" || echo "!! no codesearch skills bundled"
+}
+
+echo
 echo "════ done ════"
 ls -lh "$SCRIPTS/../Hoplon/Resources/"
