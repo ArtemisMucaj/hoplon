@@ -160,6 +160,9 @@ final class AppState {
             if memoryPort != clamped { memoryPort = clamped; return }
             UserDefaults.standard.set(memoryPort, forKey: "memoryPort")
             memoryManager.port = memoryPort
+            // The managed proxy entry embeds this port, so it goes stale the
+            // moment the port moves — re-point it whether or not we restart.
+            syncMemoryProxyRegistration()
             restartMemoryIfRunning()
         }
     }
@@ -187,6 +190,9 @@ final class AppState {
             if codesearchMcpPort != clamped { codesearchMcpPort = clamped; return }
             UserDefaults.standard.set(codesearchMcpPort, forKey: "codesearchMcpPort")
             codesearchManager.mcpPort = codesearchMcpPort
+            // The managed proxy entry embeds this port, so it goes stale the
+            // moment the port moves — re-point it whether or not we restart.
+            syncCodesearchProxyRegistration()
             restartCodesearchIfRunning()
         }
     }
@@ -216,6 +222,17 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(registerMemoryWithProxy, forKey: "registerMemoryWithProxy")
             syncMemoryProxyRegistration()
+        }
+    }
+
+    /// Same for Code Intelligence: keep a `codesearch` entry in the proxy's
+    /// servers.json pointing at the running codesearch MCP server, so agents
+    /// reach code search / call graph tools through the one proxy endpoint.
+    /// Turning it off removes the managed entry.
+    var registerCodesearchWithProxy: Bool {
+        didSet {
+            UserDefaults.standard.set(registerCodesearchWithProxy, forKey: "registerCodesearchWithProxy")
+            syncCodesearchProxyRegistration()
         }
     }
 
@@ -364,6 +381,11 @@ final class AppState {
         // codesearch's LLM endpoint (if the user hasn't configured one), so
         // community names + call-flow explanations work without setup.
         self.codesearchManager.llmAutodetectBase = grBackend
+        // Default ON, same reasoning as memory's: running both is only useful if
+        // agents reach code tools through the single proxy endpoint.
+        // `object(forKey:)` so an unset default reads as "not yet chosen".
+        self.registerCodesearchWithProxy =
+            (UserDefaults.standard.object(forKey: "registerCodesearchWithProxy") as? Bool) ?? true
 
         // Bootstrap preset state from disk so the UI is populated before the proxy starts.
         let (initialPresets, initialActiveID) = AppState.loadPresetsFromDisk()
@@ -379,6 +401,7 @@ final class AppState {
         // managed entry left over from a previous run would linger in
         // servers.json and the proxy would keep trying to reach a dead port.
         syncMemoryProxyRegistration()
+        syncCodesearchProxyRegistration()
 
         // Auto-discover tools when the proxy transitions to running.
         proxyManager.onBecameRunning = { [weak self] in
@@ -594,12 +617,16 @@ final class AppState {
         if codesearchEnabled { startCodesearch() }
     }
 
-    func startCodesearch() { codesearchManager.startBundled() }
+    func startCodesearch() {
+        codesearchManager.startBundled()
+        syncCodesearchProxyRegistration()
+    }
 
     func stopCodesearch() {
         codesearchRestartWork?.cancel()
         codesearchRestartWork = nil
         codesearchManager.stop()
+        syncCodesearchProxyRegistration()
     }
 
     /// Restart, coalescing rapid successive calls into one stop + delayed start.
@@ -615,20 +642,40 @@ final class AppState {
         if codesearchManager.isRunning || codesearchManager.isStarting { restartCodesearch() }
     }
 
-    // MARK: - Memory ▸ Proxy registration
+    // MARK: - Proxy registration
 
     /// Keep the proxy's `memory` server entry in step with the memory service.
     ///
     /// When both the toggle and the service are on, the entry points at the
     /// running MCP endpoint; otherwise the managed entry is removed. Only ever
-    /// touches the one entry it owns (marked via `managedByHoplon`), so a
+    /// touches the one entry it owns (marked via `managedMarker`), so a
     /// hand-written config survives untouched.
     func syncMemoryProxyRegistration() {
-        let shouldRegister = registerMemoryWithProxy && memoryEnabled
-        let changed = ProxyRegistration.sync(
+        applyProxyRegistration(
+            .memory,
+            shouldRegister: registerMemoryWithProxy && memoryEnabled,
+            endpoint: memoryManager.mcpEndpoint
+        )
+    }
+
+    /// Same for Code Intelligence's `codesearch` entry.
+    func syncCodesearchProxyRegistration() {
+        applyProxyRegistration(
+            .codesearch,
+            shouldRegister: registerCodesearchWithProxy && codesearchEnabled,
+            endpoint: codesearchManager.mcpEndpoint
+        )
+    }
+
+    private func applyProxyRegistration(
+        _ registration: ProxyRegistration,
+        shouldRegister: Bool,
+        endpoint: String
+    ) {
+        let changed = registration.sync(
             servers: &servers,
             shouldRegister: shouldRegister,
-            endpoint: memoryManager.mcpEndpoint
+            endpoint: endpoint
         )
         guard changed else { return }
         saveConfig()

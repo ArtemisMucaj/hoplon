@@ -132,18 +132,28 @@ at release time and a post-release merge ships in the *next* tag.
   maps the two common ones (DuckDB lock conflict, port in use) to actionable
   text. "It stopped itself" with no explanation is not acceptable UI.
 
-## The managed `memory` proxy entry
+## The managed `memory` and `codesearch` proxy entries
 
-When Memory is enabled and "Serve through the proxy" is on, Hoplon writes a
-`memory` server into the proxy's `servers.json` pointing at
-`http://127.0.0.1:<memoryPort>/mcp`, so agents reach memory tools through the
-one proxy endpoint.
+When Memory (or Code Intelligence) is enabled and its "Serve through the MCP
+proxy" toggle is on, Hoplon writes a `memory` / `codesearch` server into the
+proxy's `servers.json` pointing at that service's MCP endpoint
+(`http://127.0.0.1:<memoryPort>/mcp`,
+`http://127.0.0.1:<codesearchMcpPort>/mcp`), so agents reach both services'
+tools through the one proxy endpoint. Both toggles default ON and both live in
+the service's Settings ▸ Process pane under "Agent access".
 
 `servers.json` is a file the user also owns, so `ProxyRegistration` only ever
 touches the entry it created — tagged `[managed by Hoplon]` in its description.
-A hand-written `memory` server is left alone (the UI says so, rather than
-letting the toggle look broken), and turning the toggle off removes only what
-Hoplon added.
+A hand-written server of the same name is left alone (the UI says so, rather
+than letting the toggle look broken), and turning the toggle off removes only
+what Hoplon added.
+
+`ProxyRegistration` is one instance per service (`.memory`, `.codesearch`), and
+`AppState.syncMemoryProxyRegistration()` / `syncCodesearchProxyRegistration()`
+reconcile them. Each is called from its toggle, the service's start/stop, a port
+change (the endpoint embeds the port, so it goes stale otherwise) and once
+during init — property observers don't fire there, so a managed entry left over
+from a previous run would linger pointing at a dead port.
 
 ## Endpoints added to memory-rs for this app
 
