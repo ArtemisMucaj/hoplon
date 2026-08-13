@@ -27,3 +27,28 @@ jobs:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
             build
+
+      # The app installs skills from its own bundle, so a build that silently
+      # dropped them would ship a Skills section with nothing to install. The
+      # synchronized group flattens Resources/ into Contents/Resources — assert
+      # the flat names the app looks up, rather than trusting that it does.
+      - name: Verify bundled skills
+        run: |
+          RES="build/DerivedData/Build/Products/Release/Hoplon.app/Contents/Resources"
+          missing=0
+          for f in skills-manifest.json \
+                   skill-memory-rs-mcp.md skill-memory-rs-cli.md \
+                   skill-codesearch-mcp.md skill-codesearch-cli.md; do
+            if [ ! -s "$RES/$f" ]; then
+              echo "MISSING from the built app: $f"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "--- Contents/Resources ---"
+            ls -l "$RES"
+            exit 1
+          fi
+          echo "All four skills and the manifest are bundled:"
+          ls -l "$RES"/skill-*.md "$RES/skills-manifest.json"
+          cat "$RES/skills-manifest.json"

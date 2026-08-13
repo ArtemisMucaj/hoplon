@@ -81,6 +81,9 @@ final class AppState {
     /// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs
     /// CLIs. No process to supervise, so it needs no start/stop wiring.
     let cliLinkManager = CliLinkManager()
+    /// Installs the bundled memory-rs / codesearch agent skills into
+    /// `~/.claude/skills`. Also stateless as far as processes go.
+    let skillManager = SkillInstallManager()
     var discoveredTools: [String: [DiscoveredTool]] = [:]
     var isDiscoveringTools = false
     var presets: [Preset] = []

@@ -35,6 +35,7 @@ Hoplon/
     MemoryModels.swift     # memory-rs DTOs (lenient, raw-JSON-backed)
     ServerConfig.swift     # servers.json shape
     GuardrailsStats.swift  # admin /stats + /info shapes
+    SkillModels.swift      # vendored-skill manifest + install marker
     Preset.swift
   Services/                # one supervisor per binary + the clients they hand out
     ProxyManager.swift     #   panoply lifecycle (+ the shared shell-env capture)
@@ -47,7 +48,9 @@ Hoplon/
     GraphLayout.swift           # force-directed layout for the community graph
     MemoryBrowseManager.swift   # app-scoped browse state (cached tree)
     SessionImportManager.swift  # discovered sessions + background-import status
-    ProxyRegistration.swift     # the managed `memory` entry in servers.json
+    ProxyRegistration.swift     # the managed `memory`/`codesearch` servers.json entries
+    CliLinkManager.swift        # ~/.local/bin symlinks for the bundled CLIs
+    SkillInstallManager.swift   # ~/.claude/skills installs, one variant per service
   Views/
     RootView.swift         # 2-column split; the always-on sidebar
     SettingsView.swift     # per-service panes (Memory + Code nest sub-panes); live
@@ -61,8 +64,10 @@ Hoplon/
                            #   NamespaceGraph, NamespaceInsight, Llm
     Components/            # DesignSystem.swift, SharedComponents.swift,
                            #   LlmUsagesSection + LlmProviderRow (both LLM panes)
-  Resources/               # the four binaries — GITIGNORED, fetched by scripts/
-scripts/                   # download (pinned release) + build (sibling checkout) per binary
+  Resources/               # the four binaries + the four vendored skills —
+                           #   GITIGNORED, fetched by scripts/
+scripts/                   # download (pinned release) + build (sibling checkout) per binary,
+                           #   plus the skill vendoring (pinned release commit)
 ```
 
 ## Build
@@ -85,6 +90,8 @@ bash scripts/download_memory_binary.sh       # pinned release (v0.3.0) + SHA-256
 bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the fallback path)
 bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the fallback path)
 bash scripts/build_panoply_binary.sh         # builds from ../panoply
+bash scripts/download_codesearch_skills.sh   # pinned release COMMIT, vendored into Resources/
+bash scripts/download_memory_skills.sh
 ```
 
 All four binaries now ship as pinned release assets, so `fetch_binaries.sh`
@@ -154,6 +161,54 @@ reconcile them. Each is called from its toggle, the service's start/stop, a port
 change (the endpoint embeds the port, so it goes stale otherwise) and once
 during init — property observers don't fire there, so a managed entry left over
 from a previous run would linger pointing at a dead port.
+
+## Agent skills are vendored, not written here
+
+Settings ▸ CLI & Skills installs the skills that document memory-rs and
+codesearch into `~/.claude/skills`. Same rule as everything else in this repo:
+the content is upstream's, the app only ships and places it.
+
+`scripts/lib/fetch_skills.sh` vendors `.claude/skills/<name>/SKILL.md` out of
+each service's repo into `Hoplon/Resources/skill-<name>.md`, plus a
+`skills-manifest.json` recording repo, tag, commit and SHA-256 per skill. The app
+installs from its own bundle, so installing needs no network.
+
+**Pinned to a commit, not a tag.** Skills are not release assets — they live in
+the repo tree — so "the release's skills" has to mean the commit the release tag
+pointed at. The scripts pin that commit and abort if the tag has since moved,
+because a re-cut tag would otherwise vendor skill text describing a binary that
+isn't the one in `Resources/`. Keep `*_SKILLS_TAG` in step with the matching
+binary pin; the skill and the binary it documents must come from one release.
+
+**Files are flat in Resources/.** `skill-codesearch-mcp.md`, not
+`Skills/codesearch-mcp/SKILL.md`: the synchronized root group adds every file
+under `Resources/` to Copy Bundle Resources individually, so four files all named
+`SKILL.md` would collide in `Contents/Resources`. A CI step asserts the flat names
+are in the built `.app` — the app installs from them, so a silent drop would ship
+a Skills section with nothing to install.
+
+**One variant per service, enforced.** Each service publishes an `-mcp` and a
+`-cli` skill covering the same capability through different surfaces. Both
+installed at once gives the agent two overlapping playbooks for one service, and
+it will reach for `codesearch index` in a session where only the MCP tools are
+connected. So the picker is three-way (None / MCP / CLI) and selecting one variant
+removes the other. The choice is per-service: memory over MCP while codesearch
+runs from the CLI is a legitimate setup.
+
+**Only ever touch what we installed.** Every install drops a `.hoplon-skill.json`
+marker in the skill directory — the same convention as `[managed by Hoplon]` in
+`servers.json`. A hand-authored `~/.claude/skills/codesearch-mcp` is left alone
+and reported in the UI instead of being overwritten, and removal deletes only
+`SKILL.md` and the marker, keeping the directory if the user has added anything
+else to it. The marker also carries what was installed, so a bundle whose skill
+has moved on shows "update available" rather than silently drifting.
+
+`codesearch-cli` ships an `install.sh` beside its `SKILL.md` upstream; it is not
+vendored. It downloads its own copy of the binary into `INSTALL_DIR`, which would
+fight the symlink the pane above it manages, and the SKILL.md line that references
+it is a repo-relative path that can't resolve from `~/.claude/skills` anyway. The
+`SKILL.md` itself is installed verbatim — what is installed is exactly what the
+release shipped.
 
 ## Endpoints added to memory-rs for this app
 

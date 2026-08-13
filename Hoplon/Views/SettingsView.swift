@@ -167,7 +167,7 @@ struct SettingsView: View {
                     }
                     Section("Tools") {
                         HStack {
-                            Label("Command Line", systemImage: "terminal")
+                            Label("CLI & Skills", systemImage: "terminal")
                             Spacer()
                         }
                         .tag(SettingsItem.commandLine)
@@ -534,12 +534,14 @@ private struct CodeLlmPane: View {
     }
 }
 
-// MARK: - Tools: Command Line pane
+// MARK: - Tools: CLI & Skills pane
 
-/// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs CLIs
-/// so they're runnable from a terminal. The links point into the app bundle, so
-/// they track the current binary but go stale if the app is moved — each row
-/// surfaces that and its toggle repairs it.
+/// Two halves of the same job — making the bundled services usable *outside* this
+/// app. The top half symlinks the CLIs into `~/.local/bin`; the bottom half
+/// installs the agent skills that document them into `~/.claude/skills`.
+///
+/// The links point into the app bundle, so they track the current binary but go
+/// stale if the app is moved — each row surfaces that and its toggle repairs it.
 private struct CommandLinePane: View {
     @Environment(AppState.self) var state
     private var manager: CliLinkManager { state.cliLinkManager }
@@ -554,6 +556,8 @@ private struct CommandLinePane: View {
                     toolRow(tool)
                 }
             }
+
+            AgentSkillsSection()
 
             if !manager.binDirOnPath {
                 Section("PATH") {
@@ -584,8 +588,11 @@ private struct CommandLinePane: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Command Line")
-        .onAppear { manager.refresh() }
+        .navigationTitle("CLI & Skills")
+        .onAppear {
+            manager.refresh()
+            state.skillManager.refresh()
+        }
     }
 
     @ViewBuilder
@@ -627,5 +634,131 @@ private struct CommandLinePane: View {
     private func copyToPasteboard(_ string: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(string, forType: .string)
+    }
+}
+
+// MARK: - Tools: Agent Skills section
+
+/// Installs the memory-rs / codesearch skills bundled with this build into
+/// `~/.claude/skills`, one variant per service.
+///
+/// The picker is three-way (None / MCP / CLI) rather than a toggle plus a style
+/// switch, because the three states are what the user is actually choosing
+/// between: no skill, or exactly one of two mutually exclusive ones. Selecting a
+/// variant removes the other — see `SkillInstallManager` for why both at once is
+/// a trap.
+private struct AgentSkillsSection: View {
+    @Environment(AppState.self) var state
+    private var manager: SkillInstallManager { state.skillManager }
+
+    private typealias Variant = SkillInstallManager.SkillVariant
+
+    var body: some View {
+        Section("Agent Skills") {
+            if manager.hasBundledSkills {
+                Text("Installed into \(manager.skillsDirectoryPath). One per service — picking MCP removes the CLI skill, and the other way round.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(SkillInstallManager.families) { family in
+                    familyRow(family)
+                }
+            } else {
+                // The fetch scripts populate Resources/; a bundle built without
+                // them has nothing to install and should say why.
+                Label("This build doesn't bundle any skills. Run scripts/fetch_binaries.sh and rebuild.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+
+            if let error = manager.lastError {
+                ErrorCard(message: error)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func familyRow(_ family: SkillInstallManager.Family) -> some View {
+        let installed = manager.installedVariant(family)
+
+        LabeledContent {
+            Picker("", selection: Binding<Variant?>(
+                get: { installed },
+                set: { variant in
+                    if let variant { manager.install(family, variant: variant) }
+                    else { manager.remove(family) }
+                }
+            )) {
+                Text("None").tag(Optional<Variant>.none)
+                ForEach(Variant.allCases) { variant in
+                    Text(variant.title)
+                        // A variant missing from this build can't be selected —
+                        // better a dead segment than an error on tap.
+                        .help(manager.bundledSkill(family, variant) == nil
+                              ? "Not bundled with this build."
+                              : variant.blurb)
+                        // Outermost, so tag lookup doesn't have to see through
+                        // another modifier to find it.
+                        .tag(Optional(variant))
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 170)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(family.title).font(.body)
+                subtitle(family, installed: installed)
+            }
+        }
+
+        // An update is its own action: the picker already reads as "MCP is on",
+        // so re-tapping the selected segment wouldn't be discoverable.
+        if let installed,
+           case .managed(let marker, let upToDate) = manager.state(family, installed),
+           !upToDate,
+           let bundled = manager.bundledSkill(family, installed) {
+            HStack {
+                Text("Bundled: \(bundled.provenance) · installed: \(marker.tag == "local" ? "local checkout" : marker.tag) · \(String(marker.commit.prefix(7)))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Button("Update") { manager.install(family, variant: installed) }
+                    .controlSize(.small)
+            }
+        }
+
+        // The CLI skill's whole playbook is shelling out to a command that isn't
+        // on PATH until the section above installs it. Cheap to notice, annoying
+        // to debug from the agent's side.
+        if installed == .cli, state.cliLinkManager.states[family.cliCommand] != .linked {
+            Label("The \(family.cliCommand) command isn't installed above, so this skill's commands won't run.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange)
+        }
+
+        // A skill directory we don't own blocks that variant. Say so once, naming
+        // it, rather than letting the segment look broken.
+        ForEach(manager.foreignNames(family), id: \.self) { name in
+            Label("~/.claude/skills/\(name) already exists and wasn't installed by Hoplon — it's left alone.",
+                  systemImage: "info.circle.fill")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private func subtitle(_ family: SkillInstallManager.Family,
+                         installed: SkillInstallManager.SkillVariant?) -> some View {
+        if let installed, case .managed(_, let upToDate) = manager.state(family, installed) {
+            let name = family.name(for: installed)
+            if upToDate {
+                Text("\(name) · \(manager.bundledSkill(family, installed)?.provenance ?? "installed")")
+                    .font(.caption).foregroundStyle(.green)
+            } else {
+                Text("\(name) · update available")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        } else {
+            Text("Not installed").font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

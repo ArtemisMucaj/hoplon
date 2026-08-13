@@ -4,6 +4,11 @@ Hoplon/Resources/guardrail
 Hoplon/Resources/memory-rs
 Hoplon/Resources/codesearch
 
+# Agent skills vendored from each service's repo at its pinned release commit —
+# same deal as the binaries: fetched by scripts/, never committed.
+Hoplon/Resources/skill-*.md
+Hoplon/Resources/skills-manifest.json
+
 # Xcode
 build/
 DerivedData/
