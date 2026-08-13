@@ -50,7 +50,7 @@ Hoplon/
     SessionImportManager.swift  # discovered sessions + background-import status
     ProxyRegistration.swift     # the managed `memory`/`codesearch` servers.json entries
     CliLinkManager.swift        # ~/.local/bin symlinks for the bundled CLIs
-    SkillInstallManager.swift   # ~/.claude/skills installs, one variant per service
+    SkillInstallManager.swift   # ~/.agents/skills installs, one variant per service
   Views/
     RootView.swift         # 2-column split; the always-on sidebar
     SettingsView.swift     # per-service panes (Memory + Code nest sub-panes); live
@@ -165,13 +165,24 @@ from a previous run would linger pointing at a dead port.
 ## Agent skills are vendored, not written here
 
 Settings ▸ CLI & Skills installs the skills that document memory-rs and
-codesearch into `~/.claude/skills`. Same rule as everything else in this repo:
+codesearch into `~/.agents/skills`. Same rule as everything else in this repo:
 the content is upstream's, the app only ships and places it.
 
 `scripts/lib/fetch_skills.sh` vendors `.claude/skills/<name>/SKILL.md` out of
 each service's repo into `Hoplon/Resources/skill-<name>.md`, plus a
 `skills-manifest.json` recording repo, tag, commit and SHA-256 per skill. The app
-installs from its own bundle, so installing needs no network.
+installs from its own bundle, so installing needs no network. (Upstream keeps them
+under `.claude/skills` — that's the *source* path, and it is not where they land.)
+
+**`~/.agents/skills` is the install target, deliberately not `~/.claude/skills`.**
+A skill is plain markdown with frontmatter; nothing about it is specific to one
+agent runner, and hard-coding one harness's directory would make the button
+useless to the others. panoply already mounts `~/.agents/skills` alongside
+`~/.claude/skills` and serves what it finds as MCP resources to any client that
+connects with `?skills=true` (see `ProxyDetailView`'s Resources section) — so an
+install here reaches every client behind the proxy, plus any harness reading
+`.agents` natively. Note the consequence: Claude Code discovers `~/.claude/skills`
+on its own, so it picks these up through the proxy rather than from disk.
 
 **Pinned to a commit, not a tag.** Skills are not release assets — they live in
 the repo tree — so "the release's skills" has to mean the commit the release tag
@@ -197,7 +208,7 @@ runs from the CLI is a legitimate setup.
 
 **Only ever touch what we installed.** Every install drops a `.hoplon-skill.json`
 marker in the skill directory — the same convention as `[managed by Hoplon]` in
-`servers.json`. A hand-authored `~/.claude/skills/codesearch-mcp` is left alone
+`servers.json`. A hand-authored `~/.agents/skills/codesearch-mcp` is left alone
 and reported in the UI instead of being overwritten, and removal deletes only
 `SKILL.md` and the marker, keeping the directory if the user has added anything
 else to it. The marker also carries what was installed, so a bundle whose skill
@@ -206,7 +217,7 @@ has moved on shows "update available" rather than silently drifting.
 `codesearch-cli` ships an `install.sh` beside its `SKILL.md` upstream; it is not
 vendored. It downloads its own copy of the binary into `INSTALL_DIR`, which would
 fight the symlink the pane above it manages, and the SKILL.md line that references
-it is a repo-relative path that can't resolve from `~/.claude/skills` anyway. The
+it is a repo-relative path that can't resolve from `~/.agents/skills` anyway. The
 `SKILL.md` itself is installed verbatim — what is installed is exactly what the
 release shipped.
 

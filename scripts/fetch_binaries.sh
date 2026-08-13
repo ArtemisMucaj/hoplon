@@ -34,7 +34,7 @@ bash "$SCRIPTS/download_codesearch_binary.sh" || {
 echo
 echo "════ agent skills (memory-rs + codesearch) ════"
 # Vendored from each service's repo at the pinned release's commit, so the app
-# can install them into ~/.claude/skills with no network. Not fatal: a bundle
+# can install them into ~/.agents/skills with no network. Not fatal: a bundle
 # without them still runs, the Skills section just reports them missing.
 bash "$SCRIPTS/download_memory_skills.sh" || {
   echo "!! skill download failed — falling back to a sibling checkout"

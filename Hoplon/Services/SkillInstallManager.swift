@@ -2,13 +2,20 @@ import Foundation
 import CryptoKit
 
 /// Installs the agent skills that document memory-rs and codesearch into
-/// `~/.claude/skills`, from copies vendored into the app bundle at build time.
+/// `~/.agents/skills`, from copies vendored into the app bundle at build time.
 ///
 /// Why the app ships them: a skill is the *documentation half* of a service Hoplon
 /// already supervises — the app knows which release is bundled, so it can install
 /// the matching skill text and offer an update when the bundle moves on. The files
 /// come from each service's repo at its pinned release commit
 /// (`scripts/lib/fetch_skills.sh`), so installing needs no network.
+///
+/// **`~/.agents/skills`, not `~/.claude/skills`** — a harness-neutral location, so
+/// the skills aren't tied to one agent runner. panoply already mounts this
+/// directory (alongside `~/.claude/skills`) and exposes what it finds as MCP
+/// resources to any client connecting with `?skills=true`, so installing here
+/// reaches every client behind the proxy as well as any harness that reads
+/// `.agents` directly.
 ///
 /// **One variant per service, never both.** Each service publishes an `-mcp` and a
 /// `-cli` skill covering the same capability through different surfaces. Both
@@ -83,10 +90,10 @@ final class SkillInstallManager {
     /// Last install/remove error, for display.
     private(set) var lastError: String?
 
-    /// `~/.claude/skills` — Claude Code's per-user skill directory.
+    /// `~/.agents/skills` — the harness-neutral per-user skill directory.
     var skillsDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/skills", isDirectory: true)
+            .appendingPathComponent(".agents/skills", isDirectory: true)
     }
 
     var skillsDirectoryPath: String { skillsDirectory.path }

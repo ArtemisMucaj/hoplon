@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helper: vendor a service's agent skills out of its repo at the exact
 # commit a release was cut from, and install them into the app's Resources dir
-# so the built .app can write them to ~/.claude/skills with no network.
+# so the built .app can write them to ~/.agents/skills with no network.
 #
 # Skills are NOT release assets — they live in the repo tree under
 # `.claude/skills/<name>/SKILL.md`. So "pinned to the release" has to mean the

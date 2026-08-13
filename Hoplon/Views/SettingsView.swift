@@ -538,7 +538,7 @@ private struct CodeLlmPane: View {
 
 /// Two halves of the same job — making the bundled services usable *outside* this
 /// app. The top half symlinks the CLIs into `~/.local/bin`; the bottom half
-/// installs the agent skills that document them into `~/.claude/skills`.
+/// installs the agent skills that document them into `~/.agents/skills`.
 ///
 /// The links point into the app bundle, so they track the current binary but go
 /// stale if the app is moved — each row surfaces that and its toggle repairs it.
@@ -640,7 +640,7 @@ private struct CommandLinePane: View {
 // MARK: - Tools: Agent Skills section
 
 /// Installs the memory-rs / codesearch skills bundled with this build into
-/// `~/.claude/skills`, one variant per service.
+/// `~/.agents/skills`, one variant per service.
 ///
 /// The picker is three-way (None / MCP / CLI) rather than a toggle plus a style
 /// switch, because the three states are what the user is actually choosing
@@ -656,7 +656,7 @@ private struct AgentSkillsSection: View {
     var body: some View {
         Section("Agent Skills") {
             if manager.hasBundledSkills {
-                Text("Installed into \(manager.skillsDirectoryPath). One per service — picking MCP removes the CLI skill, and the other way round.")
+                Text("Installed into \(manager.skillsDirectoryPath), which any harness can read — and which the proxy mounts as MCP resources. One per service: picking MCP removes the CLI skill, and the other way round.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 ForEach(SkillInstallManager.families) { family in
@@ -739,7 +739,7 @@ private struct AgentSkillsSection: View {
         // A skill directory we don't own blocks that variant. Say so once, naming
         // it, rather than letting the segment look broken.
         ForEach(manager.foreignNames(family), id: \.self) { name in
-            Label("~/.claude/skills/\(name) already exists and wasn't installed by Hoplon — it's left alone.",
+            Label("~/.agents/skills/\(name) already exists and wasn't installed by Hoplon — it's left alone.",
                   systemImage: "info.circle.fill")
                 .font(.caption).foregroundStyle(.orange)
         }

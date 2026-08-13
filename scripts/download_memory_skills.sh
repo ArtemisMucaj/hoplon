@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Vendors memory-rs's agent skills into Hoplon/Resources/ so the app can install
-# them into ~/.claude/skills offline.
+# them into ~/.agents/skills offline.
 #
 # Pinned to the SAME release as download_memory_binary.sh — see the note there
 # and in download_codesearch_skills.sh about why the tag and commit travel

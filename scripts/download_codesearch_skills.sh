@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Vendors codesearch's agent skills into Hoplon/Resources/ so the app can install
-# them into ~/.claude/skills offline.
+# them into ~/.agents/skills offline.
 #
 # Pinned to the SAME release as download_codesearch_binary.sh: a skill that
 # documents commands the bundled binary doesn't have is worse than no skill. Keep
