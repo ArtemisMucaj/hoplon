@@ -385,7 +385,7 @@ private struct MemoryProcessPane: View {
                     Toggle("Serve through the MCP proxy", isOn: $state.registerMemoryWithProxy)
                     Text("Keeps a `memory` entry in the proxy's servers.json pointing at this service, so agents reach memory tools through the single proxy endpoint.")
                         .font(.caption).foregroundStyle(.secondary)
-                    if ProxyRegistration.hasUserDefinedEntry(in: state.servers) {
+                    if ProxyRegistration.memory.hasUserDefinedEntry(in: state.servers) {
                         Label("servers.json already defines a `memory` server of your own — Hoplon is leaving it alone.",
                               systemImage: "info.circle.fill")
                             .font(.caption).foregroundStyle(.orange)
@@ -488,6 +488,16 @@ private struct CodeProcessPane: View {
                     if state.codesearchMcpPort == state.codesearchMgmtPort {
                         Label("MCP and Management ports must be different.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Section("Agent access") {
+                    Toggle("Serve through the MCP proxy", isOn: $state.registerCodesearchWithProxy)
+                    Text("Keeps a `codesearch` entry in the proxy's servers.json pointing at this service, so agents reach code search and call-graph tools through the single proxy endpoint.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if ProxyRegistration.codesearch.hasUserDefinedEntry(in: state.servers) {
+                        Label("servers.json already defines a `codesearch` server of your own — Hoplon is leaving it alone.",
+                              systemImage: "info.circle.fill")
+                            .font(.caption).foregroundStyle(.orange)
                     }
                 }
             }
