@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.6.0...hoplon-v0.7.0) (2026-08-13)
+
+
+### Features
+
+* **code:** serve codesearch's MCP through the panoply proxy ([#27](https://github.com/ArtemisMucaj/hoplon/issues/27)) ([e7a80d8](https://github.com/ArtemisMucaj/hoplon/commit/e7a80d88b58656419a32f39c2c02a649d5041590))
+* **skills:** install the memory-rs and codesearch agent skills ([#29](https://github.com/ArtemisMucaj/hoplon/issues/29)) ([18d6df9](https://github.com/ArtemisMucaj/hoplon/commit/18d6df9c4733b0ae6c728fb1c276ef80bfe4fa03))
+
 ## [0.6.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.5.0...hoplon-v0.6.0) (2026-08-11)
 
 
