@@ -39,6 +39,16 @@ nonisolated struct ProviderConfig: Decodable, Equatable, Identifiable {
     /// Models currently served to clients.
     var exposedCount: Int { models.filter(\.exposed).count }
 
+    /// Models paired with a row id unique across the whole settings form.
+    ///
+    /// `ProviderModel.id` is the bare model id, and two providers can serve the
+    /// same one — Copilot and a local server both offering `qwen2.5-7b`. Since
+    /// every provider's rows live in one `Form`, keying on that alone makes
+    /// SwiftUI treat the two as a single row.
+    var identifiedModels: [(rowID: String, model: ProviderModel)] {
+        models.map { (rowID: "\(name)|\($0.id)", model: $0) }
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case baseURL = "base_url"

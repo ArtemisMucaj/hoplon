@@ -116,8 +116,13 @@ struct GuardrailsProvidersPane: View {
                     .foregroundStyle(.secondary)
             } else {
                 DisclosureGroup("Models (\(provider.exposedCount) of \(provider.models.count) served)") {
-                    ForEach(provider.models) { model in
-                        row(for: model, in: provider)
+                    // Keyed by (provider, model), not the bare model id: every
+                    // provider's rows live in ONE `Form`, and two providers can
+                    // serve the same id (Copilot and a local server both
+                    // offering `qwen2.5-7b`). Sharing an id makes SwiftUI treat
+                    // them as one row — the same trap the sidebar hit.
+                    ForEach(provider.identifiedModels, id: \.rowID) { entry in
+                        row(for: entry.model, in: provider)
                     }
                 }
             }

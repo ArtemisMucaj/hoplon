@@ -40,7 +40,12 @@ struct ContributionGraph: View {
         }
         // A continuous ramp from the control background to the accent colour,
         // so an empty day reads as part of the grid rather than as a hole in it.
+        //
+        // Anchored to the busiest day rather than left to infer its own bounds:
+        // an explicit domain is what makes a quiet week span the whole ramp
+        // instead of rendering uniformly pale.
         .chartForegroundStyleScale(
+            domain: 0...peak,
             range: Gradient(colors: [
                 Color(nsColor: .quaternaryLabelColor).opacity(0.35),
                 .accentColor.opacity(0.45),
@@ -109,12 +114,18 @@ struct ContributionGraph: View {
     }
 
     /// Weeks before the current one, negated so the newest column sits right.
+    ///
+    /// The padding term is the days *remaining* in this week, not today's index
+    /// within it. Using the index only lines the columns up when today is a
+    /// Monday; on any other day a column straddles two calendar weeks — with
+    /// today on a Sunday, that Sunday's own week and the previous Monday-to-
+    /// Saturday would share a column.
     private static func week(of date: Date) -> Int {
         let cal = utc
         let start = cal.startOfDay(for: Date())
         let days = cal.dateComponents([.day], from: date, to: start).day ?? 0
-        let offsetToday = (cal.component(.weekday, from: start) + 5) % 7
-        return -((days + offsetToday) / 7)
+        let remainingThisWeek = 6 - ((cal.component(.weekday, from: start) + 5) % 7)
+        return -((days + remainingThisWeek) / 7)
     }
 
     /// Monday = 0 … Sunday = 6.

@@ -33,22 +33,48 @@ class GuardrailsProvidersManager {
     /// Where to reach the admin server. Pushed down by `GuardrailsManager`.
     @ObservationIgnored var adminBase: String = "http://127.0.0.1:8081"
 
+    /// Serializes everything that produces a provider snapshot.
+    ///
+    /// Every call here returns the server's full list, so two in flight at once
+    /// race: a slow `load()` landing after an `add()` would drop the new
+    /// provider from the UI, and two mutations completing out of order would
+    /// leave the older snapshot on screen. Chaining each operation onto the
+    /// previous one makes the last write the newest read, which is the only
+    /// ordering that keeps the pane agreeing with the proxy.
+    ///
+    /// They are short admin-port calls against localhost, so serializing them
+    /// costs nothing a user would notice.
+    @ObservationIgnored private var queue: Task<Void, Never>?
+
+    /// Run `operation` after every previously queued one has finished.
+    private func serialized(_ operation: @escaping () async -> Void) async {
+        let previous = queue
+        let task = Task { @MainActor in
+            await previous?.value
+            await operation()
+        }
+        queue = task
+        await task.value
+    }
+
     private var client: GuardrailsClient { GuardrailsClient(base: adminBase) }
 
     // MARK: - Providers
 
     func load() async {
-        isLoading = true
-        defer { isLoading = false }
-        do {
-            providers = try await client.providers()
-            isUnavailable = false
-            lastError = nil
-        } catch GuardrailsClient.ClientError.notConfigured {
-            isUnavailable = true
-            providers = []
-        } catch {
-            lastError = error.localizedDescription
+        await serialized { [self] in
+            isLoading = true
+            defer { isLoading = false }
+            do {
+                providers = try await client.providers()
+                isUnavailable = false
+                lastError = nil
+            } catch GuardrailsClient.ClientError.notConfigured {
+                isUnavailable = true
+                providers = []
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
     }
 
@@ -88,18 +114,20 @@ class GuardrailsProvidersManager {
     private func mutate(
         _ name: String, _ operation: @escaping () async throws -> [ProviderConfig]
     ) async {
-        busy.insert(name)
-        defer { busy.remove(name) }
-        do {
-            providers = try await operation()
-            lastError = nil
-        } catch GuardrailsClient.ClientError.notConfigured {
-            isUnavailable = true
-        } catch {
-            lastError = error.localizedDescription
-            // The server refused, so re-read rather than leaving the UI showing
-            // the change the user attempted.
-            providers = (try? await client.providers()) ?? providers
+        await serialized { [self] in
+            busy.insert(name)
+            defer { busy.remove(name) }
+            do {
+                providers = try await operation()
+                lastError = nil
+            } catch GuardrailsClient.ClientError.notConfigured {
+                isUnavailable = true
+            } catch {
+                lastError = error.localizedDescription
+                // The server refused, so re-read rather than leaving the UI
+                // showing the change the user attempted.
+                providers = (try? await client.providers()) ?? providers
+            }
         }
     }
 

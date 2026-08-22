@@ -208,10 +208,14 @@ struct GuardrailsView: View {
     // MARK: - Per-model table
 
     private func perModelSection(_ rows: [ModelStat]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Sorted once. Sorting inside the `ForEach` re-ran it for every divider
+        // check as well, which is O(n log n) per row on every re-render — and
+        // the 5s poll re-renders this pane.
+        let sorted = rows.sorted { $0.total > $1.total }
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Requests by Model").font(.headline)
             VStack(spacing: 0) {
-                ForEach(rows.sorted { $0.total > $1.total }) { row in
+                ForEach(Array(sorted.enumerated()), id: \.element.id) { index, row in
                     HStack {
                         Text(row.provider)
                             .font(.caption)
@@ -229,7 +233,7 @@ struct GuardrailsView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    if row.id != rows.sorted(by: { $0.total > $1.total }).last?.id { Divider() }
+                    if index != sorted.count - 1 { Divider() }
                 }
             }
             .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))

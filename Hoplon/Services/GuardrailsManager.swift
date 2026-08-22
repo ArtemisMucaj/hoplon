@@ -28,6 +28,9 @@ class GuardrailsManager {
     var period: GuardrailsPeriod = .last30Days {
         didSet {
             guard period != oldValue else { return }
+            // Any /stats still in flight describes the previous window; drop it
+            // rather than letting it land on top of the new one.
+            generation += 1
             // The rollup is window-scoped, so it must be refetched; the graph
             // spans the whole history and does not move.
             if isRunning { fetchStats() }
@@ -36,6 +39,16 @@ class GuardrailsManager {
 
     /// Days the contribution graph spans.
     let graphDays = 120
+
+    /// Bumped whenever an in-flight metrics response becomes obsolete — the
+    /// proxy stopped, or the period changed.
+    ///
+    /// `URLSession` completions arrive in whatever order the responses do, so
+    /// without this a slow `/stats` for the previous period can land after the
+    /// new one and repaint the screen with figures for a window the user is no
+    /// longer looking at. A response whose captured generation is stale is
+    /// dropped rather than applied.
+    @ObservationIgnored private var generation = 0
 
     /// Providers and Copilot login, driving the Guardrails settings pane.
     let providers = GuardrailsProvidersManager()
@@ -188,8 +201,15 @@ class GuardrailsManager {
     /// Split the configured backend setting into one spec per provider.
     ///
     /// Accepts a single URL (the common case, which upstream names `default`),
-    /// or several `NAME=URL` entries separated by newlines or commas. Blank
-    /// entries are dropped so a trailing separator is not an error.
+    /// or several `NAME=URL` entries **one per line**. Blank lines are dropped
+    /// so a trailing newline is not an error.
+    ///
+    /// Newline is the only separator on purpose. A comma is not safe: it is a
+    /// legal character in a URL query (`?ids=a,b`), so splitting on it would
+    /// tear one backend into two invalid ones. Upstream does accept a
+    /// comma-separated list, but only in the environment-variable form, where
+    /// there is no alternative — a flag repeated per provider has no such
+    /// constraint, and that is what this builds.
     ///
     /// Note that only the *first* backend may be anonymous upstream; the rest
     /// must be named, so their metrics can be told apart. A user who writes two
@@ -197,12 +217,12 @@ class GuardrailsManager {
     /// guess here would.
     static func backendSpecs(_ setting: String) -> [String] {
         let specs = setting
-            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         // An empty setting is rejected before launch, but returning the raw
         // value keeps this total rather than silently dropping the flag.
-        return specs.isEmpty ? [setting] : specs
+        return specs.isEmpty ? [setting.trimmingCharacters(in: .whitespaces)] : specs
     }
 
     func stop() {
@@ -222,6 +242,10 @@ class GuardrailsManager {
         isReachable = false
         // Drop metrics from the previous run so a restart (e.g. new backend
         // or port) never shows stale numbers.
+        // Any metrics request still in flight belongs to the run that just
+        // ended; bumping the generation makes its completion a no-op instead of
+        // repopulating a screen this is clearing.
+        generation += 1
         stats = nil
         info = nil
         activity.removeAll()
@@ -274,6 +298,7 @@ class GuardrailsManager {
         guard let url = URL(string: "\(adminBase)/activity?days=\(graphDays)") else { return }
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
+        let issued = generation
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let self else { return }
             if error != nil { return }
@@ -281,6 +306,10 @@ class GuardrailsManager {
                   let parsed = try? JSONDecoder().decode(GuardrailsActivity.self, from: data)
             else { return }
             DispatchQueue.main.async {
+                // Stale: the proxy stopped, or was restarted, while this was in
+                // flight. Applying it would repopulate a screen that has been
+                // deliberately cleared.
+                guard issued == self.generation else { return }
                 if self.activity != parsed.days { self.activity = parsed.days }
             }
         }.resume()
@@ -288,6 +317,7 @@ class GuardrailsManager {
 
     private func fetchStats() {
         guard let url = URL(string: "\(adminBase)/stats\(period.query)") else { return }
+        let issued = generation
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
@@ -303,6 +333,10 @@ class GuardrailsManager {
                 return
             }
             DispatchQueue.main.async {
+                // Stale: the period changed or the proxy stopped while this was
+                // in flight, so these figures describe a window nobody is
+                // looking at — and appending a sample would skew the sparkline.
+                guard issued == self.generation else { return }
                 if self.stats != parsed { self.stats = parsed }
                 self.appendSample(from: parsed)
             }
@@ -350,6 +384,10 @@ class GuardrailsManager {
         isReachable = false
         processSource?.cancel()
         processSource = nil
+        // Any metrics request still in flight belongs to the run that just
+        // ended; bumping the generation makes its completion a no-op instead of
+        // repopulating a screen this is clearing.
+        generation += 1
         stats = nil
         info = nil
         activity.removeAll()

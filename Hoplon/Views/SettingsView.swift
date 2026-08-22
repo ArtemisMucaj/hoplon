@@ -385,7 +385,7 @@ private struct GuardrailsSettingsPane: View {
                     // Says plainly that this field stops mattering after the
                     // first run, so nobody edits it expecting the running proxy
                     // to follow.
-                    Text("Used to seed the configuration on first run. After that, manage providers under Guardrails ▸ Providers — the proxy's own config file takes precedence over this.")
+                    Text("Used to seed the configuration on first run. After that, manage providers under Guardrails ▸ Providers — the proxy's own config file takes precedence over this. For several providers, write one `name=url` per line.")
                         .font(.caption).foregroundStyle(.secondary)
                     if state.guardrailsPort == state.guardrailsAdminPort {
                         Label("Listen and Admin ports must be different.", systemImage: "exclamationmark.triangle.fill")
