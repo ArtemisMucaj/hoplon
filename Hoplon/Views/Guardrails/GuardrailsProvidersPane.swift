@@ -45,7 +45,6 @@ struct GuardrailsProvidersPane: View {
                 if let error = providers.lastError {
                     Section { ErrorCard(message: error) }
                 }
-                copilotSection
                 ForEach(providers.providers) { provider in
                     section(for: provider)
                 }
@@ -57,6 +56,12 @@ struct GuardrailsProvidersPane: View {
                         Label("Add Provider", systemImage: "plus")
                     }
                 }
+                // Below the providers and the add button, because it is a way
+                // to *get* a provider — not a peer of the ones already there.
+                // Once Copilot is configured it appears in the list above like
+                // any other, so this section removes itself rather than
+                // offering to set up something already set up.
+                copilotSection
             }
         }
         .formStyle(.grouped)
@@ -222,20 +227,19 @@ struct GuardrailsProvidersPane: View {
     /// for the proxy to come back, and then starts the device flow. Which of
     /// its models are served is afterwards the same per-model choice every
     /// other provider gets, in the section below.
+    /// True once guardrails has registered the Copilot provider — which only
+    /// happens after a successful device-flow login.
+    private var copilotConfigured: Bool {
+        providers.providers.contains { $0.name == GuardrailsProvidersManager.copilotProvider }
+    }
+
     @ViewBuilder
     private var copilotSection: some View {
-        Section("GitHub Copilot") {
-            if providers.copilot?.state == .authorized {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("GitHub Copilot").font(.callout.weight(.medium))
-                        Text("Signed in — pick its models below")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                }
-            } else {
+        // Gone entirely once Copilot is a provider like any other: its section
+        // above already carries the routing toggle and the model list, so a
+        // second "set up Copilot" block would invite setting up what is set up.
+        if !copilotConfigured {
+            Section("GitHub Copilot") {
                 CopilotSignInRow(login: providers.copilot, isStarting: enablingCopilot) {
                     signInToCopilot()
                 }
@@ -270,6 +274,10 @@ struct GuardrailsProvidersPane: View {
             providers.adminBase = manager.adminBase
             await providers.startCopilotLogin()
             await providers.load()
+            // The provider only exists once the flow completes, so refresh
+            // again when it does — otherwise its models never appear without a
+            // manual revisit.
+            await providers.reloadWhenCopilotLands()
         }
     }
 

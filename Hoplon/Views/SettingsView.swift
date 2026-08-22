@@ -376,17 +376,27 @@ private struct GuardrailsSettingsPane: View {
                     LabeledContent("Admin Port") {
                         PortField(value: $state.guardrailsAdminPort).frame(width: 80, height: 22)
                     }
-                    // Just the text box — the backend URL is the field's value,
-                    // so a separate LabeledContent label would echo it twice.
-                    TextField("Backend URL", text: $state.guardrailsBackend, prompt: Text("http://127.0.0.1:1234"))
-                        .textFieldStyle(.roundedBorder)
                     Text("Point your client at http://127.0.0.1:\(state.guardrailsPort)/v1. Metrics are served on the admin port.")
                         .font(.caption).foregroundStyle(.secondary)
-                    // Says plainly that this field stops mattering after the
-                    // first run, so nobody edits it expecting the running proxy
-                    // to follow.
-                    Text("Used to seed the configuration on first run. After that, manage providers under Guardrails ▸ Providers — the proxy's own config file takes precedence over this. For several providers, write one `name=url` per line.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    // Shown only until the proxy has written its config. After
+                    // that the file wins over the flags, so the field would be
+                    // a text box that looks like configuration and changes
+                    // nothing — the proxy keeps being passed a value it
+                    // ignores. Providers move to Guardrails ▸ Providers, which
+                    // edits the file the proxy actually reads.
+                    if !state.guardrailsHasConfig {
+                        LabeledContent("First backend") {
+                            TextField("", text: $state.guardrailsBackend, prompt: Text("http://127.0.0.1:1234"))
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        Text("Seeds the configuration the first time the proxy runs. After that, providers are managed under Guardrails ▸ Providers.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("Providers") {
+                            Text("Managed under Guardrails ▸ Providers")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     if state.guardrailsPort == state.guardrailsAdminPort {
                         Label("Listen and Admin ports must be different.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.red)

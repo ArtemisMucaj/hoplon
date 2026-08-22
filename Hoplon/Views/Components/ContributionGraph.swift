@@ -56,7 +56,9 @@ struct ContributionGraph: View {
     /// in a narrow one.
     private var cell: CGFloat {
         let columns = CGFloat(max(layout.weeks.count, 1))
-        let usable = available - labelWidth - gap - (columns - 1) * gap
+        // Each column now occupies `cell + gap`, so the gaps are inside the
+        // per-column pitch rather than between columns.
+        let usable = available - labelWidth - columns * gap
         guard usable > 0 else { return 11 }
         return (usable / columns).clamped(to: 8...18)
     }
@@ -107,9 +109,11 @@ struct ContributionGraph: View {
     // MARK: - Grid
 
     private var grid: some View {
-        HStack(spacing: gap) {
+        // No spacing here: each cell's frame already carries its gap, which is
+        // what lets hit areas meet instead of leaving gaps between them.
+        HStack(spacing: 0) {
             ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                VStack(spacing: gap) {
+                VStack(spacing: 0) {
                     ForEach(0..<7, id: \.self) { weekday in
                         cellView(week[weekday])
                     }
@@ -133,6 +137,15 @@ struct ContributionGraph: View {
                             lineWidth: 1.5
                         )
                 )
+                // The hit area covers the cell *and* its share of the gaps
+                // around it, so moving across the grid hands off from one cell
+                // straight to the next. Without it the 3pt gaps are dead space:
+                // the pointer leaves a cell, `hovered` clears, and the readout
+                // blanks for a frame between every pair of cells.
+                //
+                // Applied after the visual frame, so only hit-testing grows —
+                // the drawn square is unchanged.
+                .frame(width: cell + gap, height: cell + gap)
                 .contentShape(Rectangle())
                 .onTapGesture { onSelect(day) }
                 // Hover drives the readout under the grid rather than a
@@ -149,8 +162,9 @@ struct ContributionGraph: View {
                 }
         } else {
             // A day before the range starts: holds the column's shape without
-            // claiming there was no traffic.
-            Color.clear.frame(width: cell, height: cell)
+            // claiming there was no traffic. Same footprint as a real cell,
+            // gap included, so the columns stay aligned.
+            Color.clear.frame(width: cell + gap, height: cell + gap)
         }
     }
 
@@ -158,7 +172,8 @@ struct ContributionGraph: View {
 
     private var weekdayLabels: some View {
         // Mon/Wed/Fri only, as GitHub does — seven labels crowd an 11pt row.
-        VStack(spacing: gap) {
+        // Spacing 0 and a cell+gap row height, matching the grid's pitch.
+        VStack(spacing: 0) {
             // Matches the month row above the grid (11pt + the VStack's 2pt
             // spacing), so row N of the labels lines up with row N of the cells.
             Color.clear.frame(height: 13)
@@ -172,7 +187,7 @@ struct ContributionGraph: View {
                         Color.clear
                     }
                 }
-                .frame(width: labelWidth - gap, height: cell, alignment: .trailing)
+                .frame(width: labelWidth - gap, height: cell + gap, alignment: .trailing)
             }
         }
         // Without this the column takes its width from the widest *available*
@@ -189,10 +204,10 @@ struct ContributionGraph: View {
         // is an overlay pinned to the column's leading edge rather than a sized
         // frame: constraining the text to the column width makes it wrap one
         // character per line ("A / p / r").
-        HStack(spacing: gap) {
+        HStack(spacing: 0) {
             ForEach(Array(monthColumns.enumerated()), id: \.offset) { _, label in
                 Color.clear
-                    .frame(width: cell, height: 11)
+                    .frame(width: cell + gap, height: 11)
                     .overlay(alignment: .leading) {
                         if let label {
                             Text(label)
@@ -223,16 +238,21 @@ struct ContributionGraph: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            if let day = hovered ?? selectedDay {
-                Text(Self.tooltip(day))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else {
-                Text("\(total) tokens over \(activeDays) active days")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // One `Text` whose content changes, never a branch between two
+            // views. Swapping the readout for a summary made the 3pt gaps
+            // between cells flash: leaving a cell cleared `hovered`, the
+            // summary appeared for one frame, and the next cell replaced it.
+            // Empty when nothing is hovered, so the line holds its height and
+            // the row below never shifts.
+            Text(hovered.map { Self.tooltip($0) }
+                    ?? selectedDay.map { Self.tooltip($0) }
+                    ?? " ")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                // No implicit animation: a crossfade on a label that tracks the
+                // pointer reads as lag, not polish.
+                .animation(nil, value: hovered?.date)
             Spacer()
             Text("Less").font(.system(size: 9)).foregroundStyle(.secondary)
             ForEach(0..<5, id: \.self) { level in
@@ -249,8 +269,6 @@ struct ContributionGraph: View {
         return days.first { $0.date == selected }
     }
 
-    private var total: String { TokenBars.compact(days.reduce(0) { $0 + $1.billedTokens }) }
-    private var activeDays: Int { days.filter { $0.requests > 0 }.count }
 
     // MARK: - Shading
 

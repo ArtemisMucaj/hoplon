@@ -151,6 +151,20 @@ final class AppState {
             restartGuardrailsIfRunning()
         }
     }
+    /// Whether guardrails has written its own configuration yet.
+    ///
+    /// Once `~/.guardrails/config.json` exists it takes precedence over every
+    /// `--backend` flag, so the seed field stops having any effect — which is
+    /// worth hiding rather than leaving as a control that silently does
+    /// nothing. Read live rather than cached: the proxy writes the file on its
+    /// first run, while the app is up.
+    var guardrailsHasConfig: Bool {
+        FileManager.default.fileExists(
+            atPath: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".guardrails/config.json").path
+        )
+    }
+
     /// Proxy GitHub Copilot models with a Copilot subscription (`--copilot`).
     ///
     /// A flag rather than a provider entry: Copilot needs an OAuth credential

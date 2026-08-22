@@ -120,6 +120,26 @@ class GuardrailsProvidersManager {
         await mutate(name) {
             try await self.client.addProvider(name: name, baseURL: baseURL)
         }
+        // A provider added at runtime has not been asked what it serves — the
+        // proxy discovers models when it builds the registry — so the pane
+        // would show "No models discovered" until the next restart. Re-reading
+        // a few times picks them up once discovery has run, which is what a
+        // user expects after typing a URL that works.
+        await probeForModels(name)
+    }
+
+    /// Re-read until `name` reports models, or we stop waiting.
+    ///
+    /// Bounded and silent: a provider that genuinely serves nothing, or is not
+    /// running yet, simply keeps its "no models discovered" note rather than
+    /// spinning forever or raising an error for a state that is not wrong.
+    private func probeForModels(_ name: String) async {
+        for _ in 0..<5 {
+            if providers.first(where: { $0.name == name })?.models.isEmpty == false { return }
+            try? await Task.sleep(for: .seconds(1))
+            if Task.isCancelled { return }
+            await load()
+        }
     }
 
     func remove(_ name: String) async {
@@ -155,6 +175,20 @@ class GuardrailsProvidersManager {
     /// request is not fired at a port that is still rebinding.
     func isReachable() async -> Bool {
         (try? await client.providers()) != nil
+    }
+
+    /// Poll until the Copilot provider appears, then stop.
+    ///
+    /// The device flow finishes on the server, so the provider is registered
+    /// some seconds after `startCopilotLogin` returns. Without this the pane
+    /// keeps showing "Not signed in" until something else triggers a reload.
+    func reloadWhenCopilotLands() async {
+        for _ in 0..<60 {
+            try? await Task.sleep(for: .seconds(2))
+            if Task.isCancelled { return }
+            await load()
+            if providers.contains(where: { $0.name == Self.copilotProvider }) { return }
+        }
     }
 
     // MARK: - Copilot
