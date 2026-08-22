@@ -139,10 +139,42 @@ final class AppState {
         }
     }
     /// Backend base URL the proxy forwards to (`--backend`).
+    ///
+    /// Only a *seed*: guardrails writes `~/.guardrails/config.json` on first run
+    /// and that file then wins over the flags, so this is what a fresh install
+    /// starts with. Providers are added, removed and re-pointed afterwards
+    /// through the management API — Settings ▸ Guardrails ▸ Providers.
     var guardrailsBackend: String {
         didSet {
             UserDefaults.standard.set(guardrailsBackend, forKey: "guardrailsBackend")
             guardrailsManager.backend = guardrailsBackend
+            restartGuardrailsIfRunning()
+        }
+    }
+    /// Whether guardrails has written its own configuration yet.
+    ///
+    /// Once `~/.guardrails/config.json` exists it takes precedence over every
+    /// `--backend` flag, so the seed field stops having any effect — which is
+    /// worth hiding rather than leaving as a control that silently does
+    /// nothing. Read live rather than cached: the proxy writes the file on its
+    /// first run, while the app is up.
+    var guardrailsHasConfig: Bool {
+        FileManager.default.fileExists(
+            atPath: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".guardrails/config.json").path
+        )
+    }
+
+    /// Proxy GitHub Copilot models with a Copilot subscription (`--copilot`).
+    ///
+    /// A flag rather than a provider entry: Copilot needs an OAuth credential
+    /// and GitHub's client-identity headers, which no `--backend URL` can carry,
+    /// so the proxy has to be started knowing about it. Authorization itself is
+    /// the device flow on the Providers pane.
+    var guardrailsCopilot: Bool {
+        didSet {
+            UserDefaults.standard.set(guardrailsCopilot, forKey: "guardrailsCopilot")
+            guardrailsManager.copilot = guardrailsCopilot
             restartGuardrailsIfRunning()
         }
     }
@@ -343,11 +375,18 @@ final class AppState {
         // corrupt persisted value collides with the listen port.
         if grAdminPort == grPort { grAdminPort = grPort == 65535 ? grPort - 1 : grPort + 1 }
         let grBackend = UserDefaults.standard.string(forKey: "guardrailsBackend") ?? "http://127.0.0.1:1234"
+        let grCopilot = UserDefaults.standard.bool(forKey: "guardrailsCopilot")
         self.guardrailsEnabled   = UserDefaults.standard.bool(forKey: "guardrailsEnabled")
         self.guardrailsPort      = grPort
         self.guardrailsAdminPort = grAdminPort
         self.guardrailsBackend   = grBackend
-        self.guardrailsManager   = GuardrailsManager(listenPort: grPort, adminPort: grAdminPort, backend: grBackend)
+        self.guardrailsCopilot   = grCopilot
+        self.guardrailsManager   = GuardrailsManager(
+            listenPort: grPort,
+            adminPort: grAdminPort,
+            backend: grBackend,
+            copilot: grCopilot
+        )
 
         // Memory settings (fall back to memory-rs's own `serve` default).
         let savedMemPort = UserDefaults.standard.integer(forKey: "memoryPort")

@@ -15,6 +15,44 @@ class GuardrailsManager {
     var isReachable = false
     var stats: GuardrailsStats?
     var info: GuardrailsInfo?
+    /// Per-day totals behind the contribution graph. Always fetched over the
+    /// full window (`graphDays`), never the selected period — the graph is how
+    /// a period is *chosen*, so narrowing it to the current selection would
+    /// leave nothing else to click.
+    var activity: [DayActivity] = []
+
+    /// The window every figure on the screen is computed over.
+    ///
+    /// Owned by the manager rather than the view: the 5s poll re-renders the
+    /// detail column, and view-owned state gets wiped by it.
+    var period: GuardrailsPeriod = .last30Days {
+        didSet {
+            guard period != oldValue else { return }
+            // Any /stats still in flight describes the previous window; drop it
+            // rather than letting it land on top of the new one.
+            generation += 1
+            // The rollup is window-scoped, so it must be refetched; the graph
+            // spans the whole history and does not move.
+            if isRunning { fetchStats() }
+        }
+    }
+
+    /// Days the contribution graph spans — a full year, as a contribution
+    /// calendar conventionally shows. Well under the server's 1100-day cap.
+    let graphDays = 371
+
+    /// Bumped whenever an in-flight metrics response becomes obsolete — the
+    /// proxy stopped, or the period changed.
+    ///
+    /// `URLSession` completions arrive in whatever order the responses do, so
+    /// without this a slow `/stats` for the previous period can land after the
+    /// new one and repaint the screen with figures for a window the user is no
+    /// longer looking at. A response whose captured generation is stale is
+    /// dropped rather than applied.
+    @ObservationIgnored private var generation = 0
+
+    /// Providers and Copilot login, driving the Guardrails settings pane.
+    let providers = GuardrailsProvidersManager()
 
     /// One rollup sample per stats poll, powering the session sparklines.
     struct Sample: Identifiable {
@@ -39,11 +77,19 @@ class GuardrailsManager {
     var listenPort: Int
     var adminPort: Int
     var backend: String
+    /// Proxy GitHub Copilot models (`--copilot`).
+    var copilot: Bool
 
-    init(listenPort: Int = 8080, adminPort: Int = 8081, backend: String = "http://127.0.0.1:1234") {
+    init(
+        listenPort: Int = 8080,
+        adminPort: Int = 8081,
+        backend: String = "http://127.0.0.1:1234",
+        copilot: Bool = false
+    ) {
         self.listenPort = listenPort
         self.adminPort = adminPort
         self.backend = backend
+        self.copilot = copilot
     }
 
     /// The OpenAI-compatible endpoint clients point at instead of the backend.
@@ -70,7 +116,10 @@ class GuardrailsManager {
             return
         }
 
-        guard !backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // Only a first run needs a seed: after that config.json supplies the
+        // providers and an empty field is the normal state, not an error.
+        if backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !Self.configExists() {
             isStarting = false
             setError("Guardrails backend URL is empty. Set it in Settings (e.g. http://127.0.0.1:1234).")
             return
@@ -99,11 +148,7 @@ class GuardrailsManager {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = [
-            "--listen", "127.0.0.1:\(listenPort)",
-            "--admin-listen", "127.0.0.1:\(adminPort)",
-            "--backend", backend,
-        ]
+        proc.arguments = launchArguments()
         proc.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
         proc.environment = ProxyManager.shellEnvironment
         processLogHandle = logHandle(for: logURL)
@@ -124,6 +169,107 @@ class GuardrailsManager {
         }
     }
 
+    /// The proxy's command line.
+    ///
+    /// The backend flags are a **seed**, not the source of truth: guardrails
+    /// writes `~/.guardrails/config.json` on first run and that file then wins
+    /// over whatever flags the launcher passes, so these only shape a fresh
+    /// install. Providers are changed afterwards through the management API
+    /// (Settings ▸ Guardrails ▸ Providers), which applies to the live registry
+    /// and persists in one call — no restart, and no risk of the flags and the
+    /// running proxy disagreeing.
+    ///
+    /// `--copilot` is the exception that must stay a flag: Copilot needs an
+    /// OAuth credential and GitHub's client-identity headers, which no
+    /// `--backend URL` can express, so the process has to start knowing about it.
+    func launchArguments() -> [String] {
+        var args = [
+            "--listen", "127.0.0.1:\(listenPort)",
+            "--admin-listen", "127.0.0.1:\(adminPort)",
+        ]
+        // Repeated rather than comma-joined: a URL may contain a comma (a query
+        // parameter), and the flag's env-var form is the only place upstream
+        // splits on one.
+        // The seed is only meaningful on a first run. Once config.json exists
+        // it wins over every flag, so passing one is at best noise in the argv
+        // and at worst a stale provider the user cannot see in the pane that
+        // claims to manage them.
+        if !Self.configExists() {
+            for spec in Self.backendSpecs(backend) {
+                args.append(contentsOf: ["--backend", spec])
+            }
+        }
+        // `--copilot` is not just "register a provider": it attaches the OAuth
+        // credential and GitHub's client-identity headers, which a `config.json`
+        // entry — a name and a URL — cannot carry. Without the flag the proxy
+        // has a Copilot provider it cannot authenticate: model discovery comes
+        // back `400 missing required Authorization header` and the login routes
+        // 404.
+        //
+        // So it is always passed when Copilot is on.
+        //
+        // KNOWN ISSUE: the proxy also persists a `copilot` entry to its config,
+        // and on the next start registers that entry *and* the flag's provider,
+        // so `/info` lists Copilot twice. Both point at the same upstream and
+        // only the flag's carries the credential, so routing and metrics are
+        // unaffected — it is a cosmetic duplicate in the provider list.
+        //
+        // Not worked around here. Deleting the entry before launch loses the
+        // race: the proxy rewrites its config during startup and restores it.
+        // The fix belongs upstream — `--copilot` should adopt an existing
+        // `copilot` entry rather than append beside it (guardrails#53).
+        if copilot { args.append("--copilot") }
+        // Conversation grouping needs no flag: guardrails made it unconditional
+        // in v0.12.0 (guardrails#53), and the flag was removed outright — so
+        // passing it now would stop the proxy from starting at all rather than
+        // being ignored.
+        return args
+    }
+
+    /// Whether the proxy has written its own configuration yet.
+    static func configExists() -> Bool {
+        FileManager.default.fileExists(
+            atPath: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".guardrails/config.json").path
+        )
+    }
+
+    /// Split the configured backend setting into one spec per provider.
+    ///
+    /// Accepts a single URL (the common case, which upstream names `default`),
+    /// or several `NAME=URL` entries **one per line**. Blank lines are dropped
+    /// so a trailing newline is not an error.
+    ///
+    /// Newline is the only separator on purpose. A comma is not safe: it is a
+    /// legal character in a URL query (`?ids=a,b`), so splitting on it would
+    /// tear one backend into two invalid ones. Upstream does accept a
+    /// comma-separated list, but only in the environment-variable form, where
+    /// there is no alternative — a flag repeated per provider has no such
+    /// constraint, and that is what this builds.
+    ///
+    /// Note that only the *first* backend may be anonymous upstream; the rest
+    /// must be named, so their metrics can be told apart. A user who writes two
+    /// bare URLs gets that error from the proxy, which states it better than a
+    /// guess here would.
+    static func backendSpecs(_ setting: String) -> [String] {
+        let specs = setting
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            // A spec must carry a URL, so anything without a scheme is dropped
+            // rather than passed through. A stray word left in the field —
+            // `--backend pr` — is not a backend the proxy can reach, and
+            // forwarding it puts a broken provider in the registry on a first
+            // run and noise in the argv on every other.
+            .filter { spec in
+                let url = spec.contains("=") ? String(spec.split(separator: "=", maxSplits: 1)[1]) : spec
+                return url.hasPrefix("http://") || url.hasPrefix("https://")
+            }
+        // Empty means "say nothing": once config.json exists the seed is unused,
+        // and passing `--backend ""` made the proxy register a nameless empty
+        // provider rather than falling through to its own configuration.
+        return specs
+    }
+
     func stop() {
         stopPolling()
         processSource?.cancel()
@@ -141,19 +287,26 @@ class GuardrailsManager {
         isReachable = false
         // Drop metrics from the previous run so a restart (e.g. new backend
         // or port) never shows stale numbers.
+        // Any metrics request still in flight belongs to the run that just
+        // ended; bumping the generation makes its completion a no-op instead of
+        // repopulating a screen this is clearing.
+        generation += 1
         stats = nil
         info = nil
+        activity.removeAll()
+        providers.reset()
         history.removeAll()
         sampleIndex = 0
     }
 
     // MARK: - Admin polling
 
-    /// Fetch /healthz, /info, and /stats from the admin server once.
+    /// Fetch /healthz, /info, /stats and /activity from the admin server once.
     func refresh() {
         fetchHealth()
         fetchInfo()
         fetchStats()
+        fetchActivity()
     }
 
     private func fetchHealth() {
@@ -181,8 +334,35 @@ class GuardrailsManager {
         }.resume()
     }
 
+    /// Per-day totals for the contribution graph.
+    ///
+    /// Deliberately unbounded by `period`: the graph is the control a period is
+    /// picked *with*, so scoping it to the current selection would collapse it
+    /// to the days already chosen.
+    private func fetchActivity() {
+        guard let url = URL(string: "\(adminBase)/activity?days=\(graphDays)") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        let issued = generation
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            guard let self else { return }
+            if error != nil { return }
+            guard let data,
+                  let parsed = try? JSONDecoder().decode(GuardrailsActivity.self, from: data)
+            else { return }
+            DispatchQueue.main.async {
+                // Stale: the proxy stopped, or was restarted, while this was in
+                // flight. Applying it would repopulate a screen that has been
+                // deliberately cleared.
+                guard issued == self.generation else { return }
+                if self.activity != parsed.days { self.activity = parsed.days }
+            }
+        }.resume()
+    }
+
     private func fetchStats() {
-        guard let url = URL(string: "\(adminBase)/stats") else { return }
+        guard let url = URL(string: "\(adminBase)/stats\(period.query)") else { return }
+        let issued = generation
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
@@ -198,6 +378,10 @@ class GuardrailsManager {
                 return
             }
             DispatchQueue.main.async {
+                // Stale: the period changed or the proxy stopped while this was
+                // in flight, so these figures describe a window nobody is
+                // looking at — and appending a sample would skew the sparkline.
+                guard issued == self.generation else { return }
                 if self.stats != parsed { self.stats = parsed }
                 self.appendSample(from: parsed)
             }
@@ -245,8 +429,14 @@ class GuardrailsManager {
         isReachable = false
         processSource?.cancel()
         processSource = nil
+        // Any metrics request still in flight belongs to the run that just
+        // ended; bumping the generation makes its completion a no-op instead of
+        // repopulating a screen this is clearing.
+        generation += 1
         stats = nil
         info = nil
+        activity.removeAll()
+        providers.reset()
         history.removeAll()
         sampleIndex = 0
     }

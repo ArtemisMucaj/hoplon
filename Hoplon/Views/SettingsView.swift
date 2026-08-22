@@ -86,9 +86,29 @@ private struct CloseTrafficLight: View {
 /// sidebar.
 enum SettingsItem: Hashable {
     case service(AppSection)
+    case guardrailsPane(GuardrailsPane)
     case memoryPane(MemoryPane)
     case codePane(CodePane)
     case commandLine
+}
+
+/// The Guardrails settings sub-panes.
+enum GuardrailsPane: String, CaseIterable, Identifiable, Hashable {
+    case process, providers
+    /// Namespaced — see the note on `CodePane.id`.
+    var id: String { "guardrails.\(rawValue)" }
+    var title: String {
+        switch self {
+        case .process:   return "Process"
+        case .providers: return "Providers"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .process:   return "gearshape.2"
+        case .providers: return "server.rack"
+        }
+    }
 }
 
 /// The Code Intelligence settings sub-panes.
@@ -154,6 +174,10 @@ struct SettingsView: View {
                     Section("Services") {
                         serviceRow(.proxy)
                         serviceRow(.guardrails)
+                        // Guardrails sub-panes, nested like the main UI.
+                        ForEach(GuardrailsPane.allCases) { pane in
+                            guardrailsPaneRow(pane)
+                        }
                         serviceRow(.memory)
                         // Memory sub-panes, nested like the main UI.
                         ForEach(MemoryPane.allCases) { pane in
@@ -219,6 +243,17 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func guardrailsPaneRow(_ pane: GuardrailsPane) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+            Text(pane.title).lineLimit(1)
+            Spacer()
+        }
+        .padding(.leading, 18)
+        .tag(SettingsItem.guardrailsPane(pane))
+    }
+
+    @ViewBuilder
     private func memoryPaneRow(_ pane: MemoryPane) -> some View {
         HStack(spacing: 8) {
             Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
@@ -246,7 +281,9 @@ struct SettingsView: View {
     private var detailPane: some View {
         switch selection {
         case .service(.proxy):      ProxySettingsPane()
-        case .service(.guardrails): GuardrailsSettingsPane()
+        case .service(.guardrails): GuardrailsSettingsPane()     // section row → Process
+        case .guardrailsPane(.process):   GuardrailsSettingsPane()
+        case .guardrailsPane(.providers): GuardrailsProvidersPane()
         case .service(.memory):     MemoryProcessPane()      // section row → Process
         case .service(.code):       CodeProcessPane()         // section row → Process
         case .memoryPane(.process): MemoryProcessPane()
@@ -339,12 +376,25 @@ private struct GuardrailsSettingsPane: View {
                     LabeledContent("Admin Port") {
                         PortField(value: $state.guardrailsAdminPort).frame(width: 80, height: 22)
                     }
-                    // Just the text box — the backend URL is the field's value,
-                    // so a separate LabeledContent label would echo it twice.
-                    TextField("Backend URL", text: $state.guardrailsBackend, prompt: Text("http://127.0.0.1:1234"))
-                        .textFieldStyle(.roundedBorder)
-                    Text("Point your client at http://127.0.0.1:\(state.guardrailsPort)/v1. Metrics are served on the admin port.")
+                    Text("Point your client at http://127.0.0.1:\(String(state.guardrailsPort))/v1. Metrics are served on the admin port.")
                         .font(.caption).foregroundStyle(.secondary)
+                    // Shown only until the proxy has written its config. After
+                    // that the file wins over the flags, so the field would be
+                    // a text box that looks like configuration and changes
+                    // nothing — the proxy keeps being passed a value it
+                    // ignores. Providers move to Guardrails ▸ Providers, which
+                    // edits the file the proxy actually reads.
+                    if !state.guardrailsHasConfig {
+                        LabeledContent("First backend") {
+                            TextField("", text: $state.guardrailsBackend, prompt: Text("http://127.0.0.1:1234"))
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        Text("Seeds the configuration the first time the proxy runs. After that, providers are managed under Guardrails ▸ Providers.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    // Nothing here once the proxy owns its configuration: the
+                    // Providers pane is one row away in the sidebar, so a line
+                    // pointing at it is a signpost to somewhere already in view.
                     if state.guardrailsPort == state.guardrailsAdminPort {
                         Label("Listen and Admin ports must be different.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.red)
@@ -378,7 +428,7 @@ private struct MemoryProcessPane: View {
                     Toggle("Bind publicly (0.0.0.0)", isOn: $state.memoryPublic)
                     // One port, two surfaces — worth stating, since every other
                     // service here takes two ports.
-                    Text("Serves both surfaces on one port: the REST API the app drives, and the MCP endpoint at http://127.0.0.1:\(state.memoryPort)/mcp.")
+                    Text("Serves both surfaces on one port: the REST API the app drives, and the MCP endpoint at http://127.0.0.1:\(String(state.memoryPort))/mcp.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Agent access") {
@@ -483,7 +533,7 @@ private struct CodeProcessPane: View {
                         PortField(value: $state.codesearchMgmtPort).frame(width: 80, height: 22)
                     }
                     Toggle("Bind publicly (0.0.0.0)", isOn: $state.codesearchPublic)
-                    Text("Point MCP clients at http://127.0.0.1:\(state.codesearchMcpPort)/mcp. The app drives the management API on port \(state.codesearchMgmtPort).")
+                    Text("Point MCP clients at http://127.0.0.1:\(String(state.codesearchMcpPort))/mcp. The app drives the management API on port \(String(state.codesearchMgmtPort)).")
                         .font(.caption).foregroundStyle(.secondary)
                     if state.codesearchMcpPort == state.codesearchMgmtPort {
                         Label("MCP and Management ports must be different.", systemImage: "exclamationmark.triangle.fill")
