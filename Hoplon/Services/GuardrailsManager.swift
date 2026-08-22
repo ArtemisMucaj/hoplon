@@ -78,21 +78,17 @@ class GuardrailsManager {
     var backend: String
     /// Proxy GitHub Copilot models (`--copilot`).
     var copilot: Bool
-    /// Infer Chat Completions conversations (`--match-conversations`).
-    var matchConversations: Bool
 
     init(
         listenPort: Int = 8080,
         adminPort: Int = 8081,
         backend: String = "http://127.0.0.1:1234",
-        copilot: Bool = false,
-        matchConversations: Bool = false
+        copilot: Bool = false
     ) {
         self.listenPort = listenPort
         self.adminPort = adminPort
         self.backend = backend
         self.copilot = copilot
-        self.matchConversations = matchConversations
     }
 
     /// The OpenAI-compatible endpoint clients point at instead of the backend.
@@ -194,7 +190,12 @@ class GuardrailsManager {
             args.append(contentsOf: ["--backend", spec])
         }
         if copilot { args.append("--copilot") }
-        if matchConversations { args.append("--match-conversations") }
+        // Always on. Chat Completions is stateless, so without it every turn's
+        // resent transcript is counted again and the token totals describe the
+        // sum of the turns rather than the conversation — which is simply the
+        // wrong number, not a cheaper approximation of the right one. It is not
+        // offered as a choice because there is no case for the other value.
+        args.append("--match-conversations")
         return args
     }
 

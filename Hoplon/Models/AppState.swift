@@ -164,22 +164,6 @@ final class AppState {
             restartGuardrailsIfRunning()
         }
     }
-    /// Reconstruct conversations from Chat Completions traffic
-    /// (`--match-conversations`), so token metrics count a resent transcript
-    /// once instead of once per turn.
-    ///
-    /// Off by default upstream, and left off here: it is the only thing that
-    /// makes the metrics path read message content — to hash it, never to store
-    /// it — and the grouping it produces is approximate.
-    var guardrailsMatchConversations: Bool {
-        didSet {
-            UserDefaults.standard.set(
-                guardrailsMatchConversations, forKey: "guardrailsMatchConversations"
-            )
-            guardrailsManager.matchConversations = guardrailsMatchConversations
-            restartGuardrailsIfRunning()
-        }
-    }
 
     // MARK: - Memory settings (persisted in UserDefaults)
 
@@ -377,21 +361,17 @@ final class AppState {
         // corrupt persisted value collides with the listen port.
         if grAdminPort == grPort { grAdminPort = grPort == 65535 ? grPort - 1 : grPort + 1 }
         let grBackend = UserDefaults.standard.string(forKey: "guardrailsBackend") ?? "http://127.0.0.1:1234"
-        // Both default to false, matching the proxy's own defaults.
         let grCopilot = UserDefaults.standard.bool(forKey: "guardrailsCopilot")
-        let grMatch   = UserDefaults.standard.bool(forKey: "guardrailsMatchConversations")
         self.guardrailsEnabled   = UserDefaults.standard.bool(forKey: "guardrailsEnabled")
         self.guardrailsPort      = grPort
         self.guardrailsAdminPort = grAdminPort
         self.guardrailsBackend   = grBackend
         self.guardrailsCopilot   = grCopilot
-        self.guardrailsMatchConversations = grMatch
         self.guardrailsManager   = GuardrailsManager(
             listenPort: grPort,
             adminPort: grAdminPort,
             backend: grBackend,
-            copilot: grCopilot,
-            matchConversations: grMatch
+            copilot: grCopilot
         )
 
         // Memory settings (fall back to memory-rs's own `serve` default).

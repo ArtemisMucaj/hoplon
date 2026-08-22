@@ -392,18 +392,6 @@ private struct GuardrailsSettingsPane: View {
                             .font(.caption).foregroundStyle(.red)
                     }
                 }
-                Section("Models") {
-                    Toggle("Proxy GitHub Copilot models", isOn: $state.guardrailsCopilot)
-                    Text("Serves Copilot models through the proxy using your subscription. Authorize under Guardrails ▸ Providers.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Metrics") {
-                    Toggle("Group Chat Completions into conversations", isOn: $state.guardrailsMatchConversations)
-                    // The honest version of the trade-off: it is the only thing
-                    // that makes the metrics path read message content at all.
-                    Text("Counts a resent transcript once instead of once per turn, so token totals reflect the conversation rather than the sum of its turns. Reads message text to hash it — nothing is stored — and the grouping is approximate, so figures derived from it are marked as such.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
             }
         }
         .formStyle(.grouped)

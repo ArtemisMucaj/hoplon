@@ -49,6 +49,10 @@ struct TokenBars: View {
                 )
                 .foregroundStyle(by: .value("Kind", segment.kind))
                 .cornerRadius(3)
+                // A stacked bar shows proportion; the exact count has to be
+                // readable somewhere, and the axis only gives a rounded scale.
+                .accessibilityLabel("\(segment.label), \(segment.kind)")
+                .accessibilityValue(segment.tokens.formatted())
             }
             .chartForegroundStyleScale([
                 "Cached prompt": Color.teal,
@@ -90,10 +94,12 @@ struct TokenBars: View {
                             .truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
 
+                        stat("tokens", Self.compact(usage.billedTokens))
+                            .help(Self.tokenBreakdown(usage))
                         stat("cache", usage.cacheHitRate.map { Self.percent($0) } ?? "—")
-                            .help("Share of prompt tokens served from the prompt cache")
+                            .help(Self.cacheBreakdown(usage))
                         stat("calls/req", usage.callsPerRequest.map { String(format: "%.2f", $0) } ?? "—")
-                            .help("Backend calls per client request — the multiplier retries add")
+                            .help(Self.callsBreakdown(usage))
                         stat("distinct", distinct(usage))
                             .help(distinctHelp(usage))
                     }
@@ -134,6 +140,36 @@ struct TokenBars: View {
         return usage.inferredConversations
             ? base + " Approximate — conversations were inferred from message prefixes."
             : base
+    }
+
+    /// Exact token counts behind the compacted figure. `compact` renders
+    /// "1.4M", which is right for a table and useless for a comparison.
+    static func tokenBreakdown(_ u: ModelUsage) -> String {
+        """
+        \(u.billedTokens.formatted()) billed tokens
+        \(u.promptTokens.formatted()) prompt (\(u.cachedTokens.formatted()) cached, \
+        \(u.uncachedPromptTokens.formatted()) billed at full rate)
+        \(u.completionTokens.formatted()) completion
+        over \(u.requests.formatted()) measured request\(u.requests == 1 ? "" : "s")
+        """
+    }
+
+    static func cacheBreakdown(_ u: ModelUsage) -> String {
+        guard u.cacheHitRate != nil else {
+            return "No prompt tokens measured for this model."
+        }
+        return """
+        \(u.cachedTokens.formatted()) of \(u.promptTokens.formatted()) prompt tokens \
+        served from the prompt cache
+        """
+    }
+
+    static func callsBreakdown(_ u: ModelUsage) -> String {
+        """
+        \(u.billedCalls.formatted()) backend call\(u.billedCalls == 1 ? "" : "s") \
+        over \(u.requests.formatted()) request\(u.requests == 1 ? "" : "s") — \
+        the multiplier corrective retries add to the bill
+        """
     }
 
     static func compact(_ value: Int) -> String {

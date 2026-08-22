@@ -115,15 +115,42 @@ struct GuardrailsProvidersPane: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                DisclosureGroup("Models (\(provider.exposedCount) of \(provider.models.count) served)") {
-                    // Keyed by (provider, model), not the bare model id: every
-                    // provider's rows live in ONE `Form`, and two providers can
-                    // serve the same id (Copilot and a local server both
-                    // offering `qwen2.5-7b`). Sharing an id makes SwiftUI treat
-                    // them as one row — the same trap the sidebar hit.
-                    ForEach(provider.identifiedModels, id: \.rowID) { entry in
-                        row(for: entry.model, in: provider)
+                // Shown inline rather than behind a disclosure: choosing which
+                // models a provider serves is the main thing this pane is for,
+                // so it should not need a click to find.
+                HStack {
+                    Text("Models")
+                    Text("\(provider.exposedCount) of \(provider.models.count) served")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("All") {
+                        Task {
+                            await providers.setModelsExposed(
+                                provider.name, models: provider.models.map(\.id), exposed: true
+                            )
+                        }
                     }
+                    .controlSize(.small)
+                    .disabled(provider.exposedCount == provider.models.count)
+                    Button("None") {
+                        Task {
+                            await providers.setModelsExposed(
+                                provider.name, models: provider.models.map(\.id), exposed: false
+                            )
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(provider.exposedCount == 0)
+                }
+                .disabled(providers.busy.contains(provider.name))
+
+                // Keyed by (provider, model), not the bare model id: every
+                // provider's rows live in ONE `Form`, and two providers can
+                // serve the same id (Copilot and a local server both offering
+                // `qwen2.5-7b`). Sharing an id makes SwiftUI treat them as one
+                // row — the same trap the sidebar hit.
+                ForEach(provider.identifiedModels, id: \.rowID) { entry in
+                    row(for: entry.model, in: provider)
                 }
             }
 
@@ -182,45 +209,45 @@ struct GuardrailsProvidersPane: View {
 
     // MARK: - Copilot
 
+    /// Copilot as an inventory row, matching the LLM panes: the same
+    /// `CopilotSignInRow` drives the same server-side device flow, so it reads
+    /// and behaves identically wherever it appears.
+    ///
+    /// Signing in *is* the decision to proxy Copilot — there is no separate
+    /// "enable" toggle, because a signed-in subscription nobody wanted proxied
+    /// is not a state worth modelling. Which of its models are served is then
+    /// the same per-model choice every other provider gets, in the section
+    /// below.
     @ViewBuilder
     private var copilotSection: some View {
         if !providers.copilotUnavailable {
             Section("GitHub Copilot") {
-                if let status = providers.copilot, status.state == .authorized {
-                    Label("Authorized", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                    Text("The proxy can serve Copilot models using your subscription.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Re-authorize") { Task { await providers.startCopilotLogin() } }
-                } else if let status = providers.copilot, status.state == .pending,
-                          let code = status.userCode {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Enter this code at GitHub:").font(.caption).foregroundStyle(.secondary)
-                        Text(code)
-                            .font(.system(.title2, design: .monospaced).weight(.semibold))
-                            .textSelection(.enabled)
-                        if let uri = status.verificationUri, let url = URL(string: uri) {
-                            Link(destination: url) {
-                                Label(uri, systemImage: "arrow.up.forward.square")
-                            }
-                            .font(.callout)
+                if providers.copilot?.state == .authorized {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("GitHub Copilot").font(.callout.weight(.medium))
+                            Text("Signed in — Copilot models are proxied")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                        ProgressView().controlSize(.small)
+                        Spacer(minLength: 8)
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(.green)
+                        Button("Sign out", action: signOutCopilot).controlSize(.small)
                     }
-                    .padding(.vertical, 2)
                 } else {
-                    if let error = providers.copilot?.error {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-                    Text("Authorize once to proxy Copilot models with your subscription.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button("Sign in with GitHub") {
+                    CopilotSignInRow(
+                        login: providers.copilot,
+                        isStarting: providers.busy.contains(GuardrailsProvidersManager.copilotProvider)
+                    ) {
                         Task { await providers.startCopilotLogin() }
                     }
                 }
             }
         }
+    }
+
+    private func signOutCopilot() {
+        Task { await providers.remove(GuardrailsProvidersManager.copilotProvider) }
     }
 
     // MARK: - Add sheet

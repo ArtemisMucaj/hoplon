@@ -12,6 +12,9 @@ import Observation
 /// proxy is actually doing.
 @Observable
 class GuardrailsProvidersManager {
+    /// The name guardrails registers the Copilot provider under.
+    static let copilotProvider = "copilot"
+
     var providers: [ProviderConfig] = []
     var isLoading = false
     var lastError: String?
@@ -92,6 +95,17 @@ class GuardrailsProvidersManager {
         await mutate(name) {
             try await self.client.updateProvider(name, models: [model: exposed])
         }
+    }
+
+    /// Set every named model's exposure in one call.
+    ///
+    /// A provider can report dozens of models (Copilot does), and toggling them
+    /// one at a time would be one round trip each — and, because each response
+    /// is a full snapshot, dozens of re-renders.
+    func setModelsExposed(_ name: String, models: [String], exposed: Bool) async {
+        guard !models.isEmpty else { return }
+        let update = Dictionary(uniqueKeysWithValues: models.map { ($0, exposed) })
+        await mutate(name) { try await self.client.updateProvider(name, models: update) }
     }
 
     func add(name: String, baseURL: String, unversioned: Bool) async {

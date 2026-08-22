@@ -176,15 +176,23 @@ struct GuardrailsView: View {
     private func summaryCards(_ stats: GuardrailsStats) -> some View {
         HStack(spacing: 12) {
             MetricCard(title: "Requests", value: "\(stats.totalRequests)", color: .blue)
+                .help("\(stats.totalRequests.formatted()) guarded requests over this period")
             MetricCard(
                 title: "Billed Tokens",
                 value: TokenBars.compact(stats.totalBilledTokens),
                 color: .indigo
             )
+            // The card compacts to "2.7M"; the exact count belongs somewhere.
+            .help("\(stats.totalBilledTokens.formatted()) tokens billed — prompt plus completion, across every model that reported usage")
             MetricCard(
                 title: "Cache Hit",
                 value: stats.overallCacheHitRate.map { TokenBars.percent($0) } ?? "—",
                 color: .teal
+            )
+            .help(
+                stats.overallCacheHitRate == nil
+                    ? "No prompt tokens were measured over this period."
+                    : "\(stats.totalCachedTokens.formatted()) of \(stats.totalPromptTokens.formatted()) prompt tokens served from the prompt cache"
             )
             MetricCard(title: "Tool Calls", value: "\(stats.totalToolCalls)", color: .purple)
             MetricCard(title: "Errors", value: "\(stats.totalErrors)", color: .orange)
@@ -227,9 +235,17 @@ struct GuardrailsView: View {
                             .truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         cell("\(row.total)")
+                            .help("\(row.total.formatted()) guarded requests")
                         cell("\(row.toolCalls)")
+                            .help("\(row.toolCalls.formatted()) of them were a real tool call")
                         cell("\(row.errors)", tint: row.errors > 0 ? .orange : .primary)
+                            .help("\(row.errors.formatted()) the guardrails could not repair")
                         cell(row.successRate.map { Self.percent($0) } ?? "—")
+                            .help(
+                                row.successRate == nil
+                                    ? "This model made no tool call, so there is no rate to report."
+                                    : "\(row.succeeded.formatted()) of \(row.succeeded + row.errors) tool calls succeeded"
+                            )
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
