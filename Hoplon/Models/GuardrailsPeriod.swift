@@ -84,12 +84,18 @@ nonisolated enum GuardrailsPeriod: Equatable, Hashable {
     }
 
     /// "22 Aug 2026" for a `YYYY-MM-DD` key, in the user's locale.
-    static func pretty(_ date: String) -> String {
-        guard let d = DayActivity.formatter.date(from: date) else { return date }
+    /// Built once: `DateFormatter` is expensive to construct, and this is called
+    /// per hovered cell.
+    private static let display: DateFormatter = {
         let f = DateFormatter()
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateStyle = .medium
         f.timeStyle = .none
-        return f.string(from: d)
+        return f
+    }()
+
+    static func pretty(_ date: String) -> String {
+        guard let d = DayActivity.formatter.date(from: date) else { return date }
+        return display.string(from: d)
     }
 }

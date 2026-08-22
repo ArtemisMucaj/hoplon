@@ -21,41 +21,87 @@ struct ContributionGraph: View {
     let selected: String?
     let onSelect: (DayActivity) -> Void
 
-    /// Cell geometry, matching GitHub's proportions: a small square with a
-    /// gap narrower than the square itself.
-    private let cell: CGFloat = 11
+    /// Gap between cells, and the width reserved for the weekday labels. Both
+    /// fixed; the cell itself is derived from whatever width is left.
     private let gap: CGFloat = 3
+    private let labelWidth: CGFloat = 30
 
+    /// Width the calendar was actually given, measured rather than assumed.
+    @State private var available: CGFloat = 0
     @State private var hovered: DayActivity?
 
-    /// Columns of one calendar week each, oldest first, every column a full
-    /// Monday-to-Sunday run.
-    private var weeks: [[DayActivity?]] { Self.weeks(days, span: span) }
+    /// Everything derived from `days`, computed once per change rather than
+    /// per access.
+    ///
+    /// These were computed properties, which SwiftUI re-evaluates on every
+    /// read. `cell` read `weeks`, and each of ~371 cells read `cell` twice — so
+    /// a single render rebuilt the whole year's calendar (dictionary, date
+    /// arithmetic and all) hundreds of times, and did it again on every hover,
+    /// because a hover mutates state and re-renders the view. That is what made
+    /// the pane feel slow; nothing here touches the database.
+    private struct Layout {
+        var weeks: [[DayActivity?]] = []
+        var monthColumns: [String?] = []
+        var peak: Int = 1
+    }
 
-    /// The busiest day, which anchors the shade buckets. Scaling to the
-    /// observed maximum rather than a fixed ceiling keeps a quiet week legible
-    /// instead of uniformly pale.
-    private var peak: Int { max(days.map(\.billedTokens).max() ?? 0, 1) }
+    @State private var layout = Layout()
+
+    /// Cell edge, sized so the year's columns exactly fill the available width.
+    ///
+    /// A fixed 11pt cell leaves the calendar short of its container on a wide
+    /// window — the year is all there, drawn smaller than the space allows.
+    /// Deriving it instead means the graph grows with the pane, and the bound
+    /// keeps it from turning into chunky tiles in a very wide one or vanishing
+    /// in a narrow one.
+    private var cell: CGFloat {
+        let columns = CGFloat(max(layout.weeks.count, 1))
+        let usable = available - labelWidth - gap - (columns - 1) * gap
+        guard usable > 0 else { return 11 }
+        return (usable / columns).clamped(to: 8...18)
+    }
+
+    private var weeks: [[DayActivity?]] { layout.weeks }
+    private var monthColumns: [String?] { layout.monthColumns }
+    private var peak: Int { layout.peak }
+
+    /// Rebuild the derived layout. Called when the data or the span changes,
+    /// not on every read.
+    private func rebuildLayout() {
+        let weeks = Self.weeks(days, span: span)
+        layout = Layout(
+            weeks: weeks,
+            monthColumns: Self.monthColumns(for: weeks),
+            peak: max(days.map(\.billedTokens).max() ?? 0, 1)
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // `.leading` on both axes, and the whole calendar pinned left with a
-            // trailing spacer: the grid is a fixed size (a cell is 11pt, not a
-            // share of the width), so letting the row distribute slack pushes it
-            // to the far edge away from its own weekday labels.
+            // `.leading` on both axes: the labels sit immediately beside the
+            // rows they name, and the grid — now sized to consume the remaining
+            // width — starts right after them.
             HStack(alignment: .top, spacing: gap) {
                 weekdayLabels
                 VStack(alignment: .leading, spacing: 2) {
                     monthLabels
                     grid
                 }
-                Spacer(minLength: 0)
             }
             footer
         }
-        // The calendar is intrinsically sized; let the surrounding column give
-        // it exactly that and keep the slack on the trailing edge.
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Measure, so the cell size can be derived from the width the parent
+        // actually offers rather than guessed at.
+        .background(
+            GeometryReader { geo in
+                Color.clear.onAppear { available = geo.size.width }
+                    .onChange(of: geo.size.width) { _, new in available = new }
+            }
+        )
+        .onAppear { rebuildLayout() }
+        .onChange(of: days) { _, _ in rebuildLayout() }
+        .onChange(of: span) { _, _ in rebuildLayout() }
     }
 
     // MARK: - Grid
@@ -89,8 +135,18 @@ struct ContributionGraph: View {
                 )
                 .contentShape(Rectangle())
                 .onTapGesture { onSelect(day) }
-                .onHover { hovered = $0 ? day : (hovered?.date == day.date ? nil : hovered) }
-                .help(Self.tooltip(day))
+                // Hover drives the readout under the grid rather than a
+                // per-cell `.help()`. `.help()` built a formatted tooltip
+                // string for all ~371 cells on every render, including the
+                // renders that hovering itself triggers; the readout formats
+                // one string for the cell actually under the pointer.
+                .onHover { inside in
+                    if inside {
+                        if hovered?.date != day.date { hovered = day }
+                    } else if hovered?.date == day.date {
+                        hovered = nil
+                    }
+                }
         } else {
             // A day before the range starts: holds the column's shape without
             // claiming there was no traffic.
@@ -116,13 +172,13 @@ struct ContributionGraph: View {
                         Color.clear
                     }
                 }
-                .frame(width: 26, height: cell, alignment: .trailing)
+                .frame(width: labelWidth - gap, height: cell, alignment: .trailing)
             }
         }
         // Without this the column takes its width from the widest *available*
         // space rather than its content, and the grid beside it gets pushed to
         // the far edge — the labels end up nowhere near the rows they name.
-        .frame(width: 26)
+        .frame(width: labelWidth - gap)
     }
 
     private var monthLabels: some View {
@@ -150,7 +206,7 @@ struct ContributionGraph: View {
     }
 
     /// A month name for each column that begins a new month, `nil` otherwise.
-    private var monthColumns: [String?] {
+    static func monthColumns(for weeks: [[DayActivity?]]) -> [String?] {
         var seen: String?
         return weeks.map { week -> String? in
             guard let first = week.compactMap({ $0 }).first, let date = first.day else {
@@ -270,11 +326,17 @@ struct ContributionGraph: View {
         ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][max(0, min(6, index))]
     }
 
-    private static func monthName(_ date: Date) -> String {
+    /// Built once. A `DateFormatter` is expensive to construct, and this was
+    /// making a fresh one per column on every render.
+    private static let monthFormatter: DateFormatter = {
         let f = DateFormatter()
         f.timeZone = TimeZone(identifier: "UTC")
         f.dateFormat = "MMM"
-        return f.string(from: date)
+        return f
+    }()
+
+    private static func monthName(_ date: Date) -> String {
+        monthFormatter.string(from: date)
     }
 
     /// Bucket `span` days into calendar weeks, oldest column first.
@@ -311,5 +373,13 @@ struct ContributionGraph: View {
         // The current, partial week.
         if column.contains(where: { $0 != nil }) { columns.append(column) }
         return columns
+    }
+}
+
+private extension CGFloat {
+    /// Clamp to a closed range — used to keep a derived cell size sane at both
+    /// extremes of window width.
+    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }
