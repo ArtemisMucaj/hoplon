@@ -219,12 +219,10 @@ class GuardrailsManager {
         // The fix belongs upstream — `--copilot` should adopt an existing
         // `copilot` entry rather than append beside it (guardrails#53).
         if copilot { args.append("--copilot") }
-        // Always on. Chat Completions is stateless, so without it every turn's
-        // resent transcript is counted again and the token totals describe the
-        // sum of the turns rather than the conversation — which is simply the
-        // wrong number, not a cheaper approximation of the right one. It is not
-        // offered as a choice because there is no case for the other value.
-        args.append("--match-conversations")
+        // Conversation grouping needs no flag: guardrails made it unconditional
+        // in v0.12.0 (guardrails#53), and the flag was removed outright — so
+        // passing it now would stop the proxy from starting at all rather than
+        // being ignored.
         return args
     }
 

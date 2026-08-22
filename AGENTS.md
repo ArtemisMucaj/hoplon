@@ -158,6 +158,13 @@ is persisted together, so no restart is needed and the UI cannot drift from what
 the proxy is doing. The Backend URL field on the Process pane says plainly that
 it only seeds the first run.
 
+Conversation grouping is not configurable. guardrails v0.12.0 removed
+`--match-conversations` and made it unconditional: Chat Completions is
+stateless, so every turn resends the transcript, and counting each resent prefix
+again reports the sum of the turns rather than the conversation. The figures
+stay marked approximate (`~`, `inferred_conversations`) because the edges are
+inferred from message prefixes.
+
 `--copilot` is the one exception that must stay a flag: Copilot needs an OAuth
 credential and GitHub's client-identity headers, which no `--backend URL` can
 express, so the process has to start knowing about it. Authorization itself is
