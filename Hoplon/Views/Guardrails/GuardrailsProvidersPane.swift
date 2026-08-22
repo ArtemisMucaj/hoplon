@@ -127,6 +127,16 @@ struct GuardrailsProvidersPane: View {
                     Text("Models")
                     Text("\(provider.exposedCount) of \(provider.models.count) served")
                         .font(.caption).foregroundStyle(.secondary)
+                    // A provider's catalogue changes under it — GitHub offered
+                    // 39 Copilot models one day and 26 the next. The list here
+                    // is the *live* catalogue, so a model that goes away simply
+                    // stops appearing, which reads as data loss. Nothing is
+                    // lost: the choice is stored per model and applies again if
+                    // it comes back. The header says only what it can know from
+                    // this response.
+                    Text("as offered now")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .help("Only models this provider is currently offering. A model that disappears keeps whatever you chose for it and reappears here if the provider offers it again.")
                     Spacer()
                     Button("All") {
                         Task {
