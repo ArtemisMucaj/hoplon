@@ -199,12 +199,26 @@ class GuardrailsManager {
                 args.append(contentsOf: ["--backend", spec])
             }
         }
-        // `--copilot` *adds* a Copilot provider; it is not a request to ensure
-        // one exists. Passing it when config.json already lists `copilot`
-        // registers a second, identical entry — which is what put Copilot in
-        // the provider list twice. Once the proxy has written its own config,
-        // that file is the source of truth and the flag has nothing to add.
-        if copilot && !Self.configHasCopilot() { args.append("--copilot") }
+        // `--copilot` is not just "register a provider": it attaches the OAuth
+        // credential and GitHub's client-identity headers, which a `config.json`
+        // entry — a name and a URL — cannot carry. Without the flag the proxy
+        // has a Copilot provider it cannot authenticate: model discovery comes
+        // back `400 missing required Authorization header` and the login routes
+        // 404.
+        //
+        // So it is always passed when Copilot is on.
+        //
+        // KNOWN ISSUE: the proxy also persists a `copilot` entry to its config,
+        // and on the next start registers that entry *and* the flag's provider,
+        // so `/info` lists Copilot twice. Both point at the same upstream and
+        // only the flag's carries the credential, so routing and metrics are
+        // unaffected — it is a cosmetic duplicate in the provider list.
+        //
+        // Not worked around here. Deleting the entry before launch loses the
+        // race: the proxy rewrites its config during startup and restores it.
+        // The fix belongs upstream — `--copilot` should adopt an existing
+        // `copilot` entry rather than append beside it (guardrails#53).
+        if copilot { args.append("--copilot") }
         // Always on. Chat Completions is stateless, so without it every turn's
         // resent transcript is counted again and the token totals describe the
         // sum of the turns rather than the conversation — which is simply the
@@ -220,20 +234,6 @@ class GuardrailsManager {
             atPath: FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".guardrails/config.json").path
         )
-    }
-
-    /// Whether the proxy's own configuration already lists a Copilot provider.
-    ///
-    /// Read from disk rather than from the last `/providers` response: this is
-    /// needed while building the command line, before the admin server exists.
-    static func configHasCopilot() -> Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".guardrails/config.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let providers = root["providers"] as? [[String: Any]]
-        else { return false }
-        return providers.contains { $0["name"] as? String == "copilot" }
     }
 
     /// Split the configured backend setting into one spec per provider.
