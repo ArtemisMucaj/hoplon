@@ -376,7 +376,7 @@ private struct GuardrailsSettingsPane: View {
                     LabeledContent("Admin Port") {
                         PortField(value: $state.guardrailsAdminPort).frame(width: 80, height: 22)
                     }
-                    Text("Point your client at http://127.0.0.1:\(state.guardrailsPort)/v1. Metrics are served on the admin port.")
+                    Text("Point your client at http://127.0.0.1:\(String(state.guardrailsPort))/v1. Metrics are served on the admin port.")
                         .font(.caption).foregroundStyle(.secondary)
                     // Shown only until the proxy has written its config. After
                     // that the file wins over the flags, so the field would be
@@ -391,12 +391,10 @@ private struct GuardrailsSettingsPane: View {
                         }
                         Text("Seeds the configuration the first time the proxy runs. After that, providers are managed under Guardrails ▸ Providers.")
                             .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        LabeledContent("Providers") {
-                            Text("Managed under Guardrails ▸ Providers")
-                                .foregroundStyle(.secondary)
-                        }
                     }
+                    // Nothing here once the proxy owns its configuration: the
+                    // Providers pane is one row away in the sidebar, so a line
+                    // pointing at it is a signpost to somewhere already in view.
                     if state.guardrailsPort == state.guardrailsAdminPort {
                         Label("Listen and Admin ports must be different.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.red)
@@ -430,7 +428,7 @@ private struct MemoryProcessPane: View {
                     Toggle("Bind publicly (0.0.0.0)", isOn: $state.memoryPublic)
                     // One port, two surfaces — worth stating, since every other
                     // service here takes two ports.
-                    Text("Serves both surfaces on one port: the REST API the app drives, and the MCP endpoint at http://127.0.0.1:\(state.memoryPort)/mcp.")
+                    Text("Serves both surfaces on one port: the REST API the app drives, and the MCP endpoint at http://127.0.0.1:\(String(state.memoryPort))/mcp.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Agent access") {
@@ -535,7 +533,7 @@ private struct CodeProcessPane: View {
                         PortField(value: $state.codesearchMgmtPort).frame(width: 80, height: 22)
                     }
                     Toggle("Bind publicly (0.0.0.0)", isOn: $state.codesearchPublic)
-                    Text("Point MCP clients at http://127.0.0.1:\(state.codesearchMcpPort)/mcp. The app drives the management API on port \(state.codesearchMgmtPort).")
+                    Text("Point MCP clients at http://127.0.0.1:\(String(state.codesearchMcpPort))/mcp. The app drives the management API on port \(String(state.codesearchMgmtPort)).")
                         .font(.caption).foregroundStyle(.secondary)
                     if state.codesearchMcpPort == state.codesearchMgmtPort {
                         Label("MCP and Management ports must be different.", systemImage: "exclamationmark.triangle.fill")

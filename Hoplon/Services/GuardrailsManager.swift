@@ -116,7 +116,10 @@ class GuardrailsManager {
             return
         }
 
-        guard !backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // Only a first run needs a seed: after that config.json supplies the
+        // providers and an empty field is the normal state, not an error.
+        if backend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !Self.configExists() {
             isStarting = false
             setError("Guardrails backend URL is empty. Set it in Settings (e.g. http://127.0.0.1:1234).")
             return
@@ -187,10 +190,21 @@ class GuardrailsManager {
         // Repeated rather than comma-joined: a URL may contain a comma (a query
         // parameter), and the flag's env-var form is the only place upstream
         // splits on one.
-        for spec in Self.backendSpecs(backend) {
-            args.append(contentsOf: ["--backend", spec])
+        // The seed is only meaningful on a first run. Once config.json exists
+        // it wins over every flag, so passing one is at best noise in the argv
+        // and at worst a stale provider the user cannot see in the pane that
+        // claims to manage them.
+        if !Self.configExists() {
+            for spec in Self.backendSpecs(backend) {
+                args.append(contentsOf: ["--backend", spec])
+            }
         }
-        if copilot { args.append("--copilot") }
+        // `--copilot` *adds* a Copilot provider; it is not a request to ensure
+        // one exists. Passing it when config.json already lists `copilot`
+        // registers a second, identical entry — which is what put Copilot in
+        // the provider list twice. Once the proxy has written its own config,
+        // that file is the source of truth and the flag has nothing to add.
+        if copilot && !Self.configHasCopilot() { args.append("--copilot") }
         // Always on. Chat Completions is stateless, so without it every turn's
         // resent transcript is counted again and the token totals describe the
         // sum of the turns rather than the conversation — which is simply the
@@ -198,6 +212,28 @@ class GuardrailsManager {
         // offered as a choice because there is no case for the other value.
         args.append("--match-conversations")
         return args
+    }
+
+    /// Whether the proxy has written its own configuration yet.
+    static func configExists() -> Bool {
+        FileManager.default.fileExists(
+            atPath: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".guardrails/config.json").path
+        )
+    }
+
+    /// Whether the proxy's own configuration already lists a Copilot provider.
+    ///
+    /// Read from disk rather than from the last `/providers` response: this is
+    /// needed while building the command line, before the admin server exists.
+    static func configHasCopilot() -> Bool {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".guardrails/config.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let providers = root["providers"] as? [[String: Any]]
+        else { return false }
+        return providers.contains { $0["name"] as? String == "copilot" }
     }
 
     /// Split the configured backend setting into one spec per provider.
@@ -221,10 +257,19 @@ class GuardrailsManager {
         let specs = setting
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        // An empty setting is rejected before launch, but returning the raw
-        // value keeps this total rather than silently dropping the flag.
-        return specs.isEmpty ? [setting.trimmingCharacters(in: .whitespaces)] : specs
+            // A spec must carry a URL, so anything without a scheme is dropped
+            // rather than passed through. A stray word left in the field —
+            // `--backend pr` — is not a backend the proxy can reach, and
+            // forwarding it puts a broken provider in the registry on a first
+            // run and noise in the argv on every other.
+            .filter { spec in
+                let url = spec.contains("=") ? String(spec.split(separator: "=", maxSplits: 1)[1]) : spec
+                return url.hasPrefix("http://") || url.hasPrefix("https://")
+            }
+        // Empty means "say nothing": once config.json exists the seed is unused,
+        // and passing `--backend ""` made the proxy register a nameless empty
+        // provider rather than falling through to its own configuration.
+        return specs
     }
 
     func stop() {
