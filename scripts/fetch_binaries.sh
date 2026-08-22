@@ -15,7 +15,10 @@ bash "$SCRIPTS/download_panoply_binary.sh" || {
 
 echo
 echo "════ guardrail (tool-call repair proxy) ════"
-bash "$SCRIPTS/download_guardrails_binary.sh"
+bash "$SCRIPTS/download_guardrails_binary.sh" || {
+  echo "!! release download failed — building from sibling checkout"
+  bash "$SCRIPTS/build_guardrails_binary.sh"
+}
 
 echo
 echo "════ memory-rs (long-term memory) ════"

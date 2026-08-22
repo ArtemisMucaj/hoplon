@@ -15,7 +15,7 @@ almost always "that service's API doesn't expose it yet", not "add it to Hoplon"
 | Section | Binary | Repo | Ports | What it does |
 |---|---|---|---|---|
 | Proxy | `panoply` | [panoply](https://github.com/ArtemisMucaj/panoply) | `PORT` (MCP) + `PORT+1` (REST) | Aggregates every configured MCP server behind 3 tools (`load_tools` → `search_tools` → `call_tool`) |
-| Guardrails | `guardrail` | [guardrails](https://github.com/ArtemisMucaj/guardrails) | `--listen` + `--admin-listen` | Transparent proxy repairing malformed tool calls from local OpenAI-compatible servers |
+| Guardrails | `guardrail` | [guardrails](https://github.com/ArtemisMucaj/guardrails) | `--listen` + `--admin-listen` | Transparent proxy repairing malformed tool calls; routes to several providers and records token usage |
 | Memory | `memory-rs` | [memory-rs](https://github.com/ArtemisMucaj/memory-rs) | one port: REST **and** MCP at `/mcp` | Long-term memory over imported assistant sessions; hybrid recall |
 | Code Intelligence | `codesearch` | [codesearch](https://github.com/ArtemisMucaj/codesearch) | `--mcp-port` + `--mgmt-port` | Semantic code search, call graphs, Leiden communities + couplings |
 
@@ -34,12 +34,16 @@ Hoplon/
     NavigationModel.swift  # sidebar selection ↔ section/sub-tab projection
     MemoryModels.swift     # memory-rs DTOs (lenient, raw-JSON-backed)
     ServerConfig.swift     # servers.json shape
-    GuardrailsStats.swift  # admin /stats + /info shapes
+    GuardrailsStats.swift  # admin /stats + /activity + /info shapes
+    GuardrailsPeriod.swift # the window every Guardrails figure is computed over
+    GuardrailsProviders.swift # management API (/providers) shapes
     SkillModels.swift      # vendored-skill manifest + install marker
     Preset.swift
   Services/                # one supervisor per binary + the clients they hand out
     ProxyManager.swift     #   panoply lifecycle (+ the shared shell-env capture)
     GuardrailsManager.swift
+    GuardrailsClient.swift        #   async client for /providers + Copilot login
+    GuardrailsProvidersManager.swift # app-scoped provider/login state
     MemoryManager.swift    #   memory-rs lifecycle; owns browse + import sub-managers
     MemoryClient.swift     #   async REST client for memory-rs
     CodesearchManager.swift     # codesearch lifecycle + rollup polling
@@ -56,6 +60,7 @@ Hoplon/
     SettingsView.swift     # per-service panes (Memory + Code nest sub-panes); live
     MenuBarView.swift
     GuardrailsView.swift
+    Guardrails/            # GuardrailsProvidersPane (settings ▸ Providers)
     PresetsView.swift  ServerDetailView.swift
     Proxy/ProxyDetailView.swift
     Memory/                # MemoryDetailView (container), Overview, Browse,
@@ -138,6 +143,50 @@ at release time and a post-release merge ships in the *next* tag.
 - **Startup failures get a reason.** Each manager tails its service's log and
   maps the two common ones (DuckDB lock conflict, port in use) to actionable
   text. "It stopped itself" with no explanation is not acceptable UI.
+
+## Guardrails configuration lives in the proxy, not in the app
+
+`~/.guardrails/config.json` is the source of truth for which providers exist and
+which of their models are served. CLI flags only *seed* it on first run; once
+the file exists it wins, so the app drives configuration through the management
+API (`GET/POST/PATCH/DELETE /providers` on the admin port) rather than by
+rebuilding launch arguments.
+
+That is why Settings ▸ Guardrails ▸ Providers mutates over HTTP and re-renders
+from the snapshot each call returns: the change applies to the live registry and
+is persisted together, so no restart is needed and the UI cannot drift from what
+the proxy is doing. The Backend URL field on the Process pane says plainly that
+it only seeds the first run.
+
+`--copilot` is the one exception that must stay a flag: Copilot needs an OAuth
+credential and GitHub's client-identity headers, which no `--backend URL` can
+express, so the process has to start knowing about it. Authorization itself is
+the device flow on the Providers pane, and the login routes 404 without the flag
+— which the pane treats as "not configured" rather than an error.
+
+## The Guardrails screen is windowed
+
+Every figure on the screen is computed over one period, sent as `?since=`/
+`?until=` on `/stats`. The contribution graph is the exception: it always spans
+`graphDays` regardless of the selection, because it is the control the period is
+*picked with* — scoping it to the current selection would leave nothing to click.
+
+The period lives on `GuardrailsManager`, not in view `@State`, for the usual
+reason (the 5s poll re-renders the pane and would wipe it).
+
+Two things the server is deliberate about, which the UI preserves:
+
+- **`usage` absent means *not measured*,** not zero. A backend that reports no
+  usage still counts as a request; `usage_requests` beside `requests` is what
+  separates the two.
+- **Deduplicated token figures are marked `~` when approximate.** The proxy
+  reports `inferred_conversations` when it inferred conversation edges from
+  message prefixes rather than being told them, and presenting a heuristic as
+  exact would overstate it.
+
+Days are **UTC**, because that is what the proxy stamps rows in. The graph does
+not relabel them locally: shifting the label without shifting the buckets would
+misattribute traffic near midnight.
 
 ## The managed `memory` and `codesearch` proxy entries
 

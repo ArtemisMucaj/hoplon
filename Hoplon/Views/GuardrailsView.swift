@@ -1,14 +1,11 @@
 import SwiftUI
 
 /// Dedicated screen for the guardrails proxy: live running/stopped status,
-/// start/stop controls, session activity sparkline, and the metrics rollup
-/// served by the admin `/stats` endpoint (sortable tables).
+/// start/stop controls, a per-day token calendar, and the metrics rollup served
+/// by the admin `/stats` endpoint over the selected period.
 struct GuardrailsView: View {
     @Environment(AppState.self) var state
 
-    @State private var modelSort: [KeyPathComparator<ModelStat>] = [
-        KeyPathComparator(\ModelStat.total, order: .reverse)
-    ]
     @State private var errorSort: [KeyPathComparator<ErrorStat>] = [
         KeyPathComparator(\ErrorStat.count, order: .reverse)
     ]
@@ -85,10 +82,13 @@ struct GuardrailsView: View {
                 title: "Guardrails is stopped",
                 message: "Start the proxy to repair malformed tool calls from your local model and collect metrics."
             )
-        } else if let stats = manager.stats, !stats.isEmpty {
+        } else if let stats = manager.stats, !stats.isEmpty || !manager.activity.isEmpty {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    activitySection
+                    periodPicker
                     summaryCards(stats)
+                    if !stats.measured.isEmpty { tokensSection(stats) }
                     if !stats.perModel.isEmpty { perModelSection(stats.perModel) }
                     if !stats.errors.isEmpty { errorsSection(stats.errors) }
                     if let info = manager.info { infoSection(info) }
@@ -104,19 +104,104 @@ struct GuardrailsView: View {
         }
     }
 
+    // MARK: - Activity calendar
+
+    private var activitySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Daily Tokens").font(.headline)
+                Spacer()
+                // The graph buckets by UTC, because that is what the proxy
+                // stamps rows in. Saying so beats silently mislabelling a day.
+                Text("UTC days")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            ContributionGraph(
+                days: manager.activity,
+                span: manager.graphDays,
+                selected: selectedDay
+            ) { day in
+                // Tapping the selected day again clears it, so the graph is not
+                // a one-way trip into a single-day view.
+                if selectedDay == day.date {
+                    manager.period = .last30Days
+                } else {
+                    manager.period = .day(day.date)
+                }
+            }
+        }
+    }
+
+    private var selectedDay: String? {
+        if case .day(let d) = manager.period { return d }
+        return nil
+    }
+
+    // MARK: - Period
+
+    private var periodPicker: some View {
+        HStack(spacing: 10) {
+            Picker("", selection: Binding(
+                get: { manager.period.isRollingWindow ? manager.period : .last30Days },
+                set: { manager.period = $0 }
+            )) {
+                ForEach(GuardrailsPeriod.selectable, id: \.self) { period in
+                    Text(period.label).tag(period)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            // A specific day comes from the graph, not this control, so it is
+            // shown as a dismissible chip rather than a fourth segment.
+            if let day = selectedDay {
+                Button {
+                    manager.period = .last30Days
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(GuardrailsPeriod.pretty(day))
+                        Image(systemName: "xmark.circle.fill").font(.caption)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .help("Showing one day — click to go back to a rolling window")
+            }
+            Spacer()
+        }
+    }
+
     // MARK: - Summary cards
 
     private func summaryCards(_ stats: GuardrailsStats) -> some View {
         HStack(spacing: 12) {
             MetricCard(title: "Requests", value: "\(stats.totalRequests)", color: .blue)
+            MetricCard(
+                title: "Billed Tokens",
+                value: TokenBars.compact(stats.totalBilledTokens),
+                color: .indigo
+            )
+            MetricCard(
+                title: "Cache Hit",
+                value: stats.overallCacheHitRate.map { TokenBars.percent($0) } ?? "—",
+                color: .teal
+            )
             MetricCard(title: "Tool Calls", value: "\(stats.totalToolCalls)", color: .purple)
-            MetricCard(title: "Succeeded", value: "\(stats.totalSucceeded)", color: .green)
             MetricCard(title: "Errors", value: "\(stats.totalErrors)", color: .orange)
             MetricCard(
                 title: "Success Rate",
                 value: stats.overallSuccessRate.map { Self.percent($0) } ?? "—",
-                color: .teal
+                color: .green
             )
+        }
+    }
+
+    // MARK: - Tokens
+
+    private func tokensSection(_ stats: GuardrailsStats) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tokens by Model").font(.headline)
+            TokenBars(models: stats.measured)
         }
     }
 
@@ -124,37 +209,56 @@ struct GuardrailsView: View {
 
     private func perModelSection(_ rows: [ModelStat]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Per Model").font(.headline)
-            Table(rows.sorted(using: modelSort), sortOrder: $modelSort) {
-                TableColumn("Model", value: \.model) { row in
-                    Text(row.model).lineLimit(1).truncationMode(.middle)
+            Text("Requests by Model").font(.headline)
+            VStack(spacing: 0) {
+                ForEach(rows.sorted { $0.total > $1.total }) { row in
+                    HStack {
+                        Text(row.provider)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                        Text(row.model)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        cell("\(row.total)")
+                        cell("\(row.toolCalls)")
+                        cell("\(row.errors)", tint: row.errors > 0 ? .orange : .primary)
+                        cell(row.successRate.map { Self.percent($0) } ?? "—")
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    if row.id != rows.sorted(by: { $0.total > $1.total }).last?.id { Divider() }
                 }
-                TableColumn("Total", value: \.total) { row in
-                    Text("\(row.total)").monospacedDigit()
-                }
-                .width(min: 50, ideal: 60)
-                TableColumn("Tools", value: \.toolCalls) { row in
-                    Text("\(row.toolCalls)").monospacedDigit()
-                }
-                .width(min: 50, ideal: 60)
-                TableColumn("OK", value: \.succeeded) { row in
-                    Text("\(row.succeeded)").monospacedDigit()
-                }
-                .width(min: 50, ideal: 60)
-                TableColumn("Errors", value: \.errors) { row in
-                    Text("\(row.errors)")
-                        .monospacedDigit()
-                        .foregroundStyle(row.errors > 0 ? Color.orange : Color.primary)
-                }
-                .width(min: 50, ideal: 60)
-                TableColumn("Rate") { row in
-                    Text(row.successRate.map { Self.percent($0) } ?? "—").monospacedDigit()
-                }
-                .width(min: 56, ideal: 64)
             }
-            .frame(height: tableHeight(rows: rows.count))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 0) {
+                    headerCell("total")
+                    headerCell("tools")
+                    headerCell("errors")
+                    headerCell("rate")
+                }
+                .padding(.trailing, 12)
+                .offset(y: -16)
+            }
+            .padding(.top, 16)
         }
+    }
+
+    private func cell(_ text: String, tint: Color = .primary) -> some View {
+        Text(text)
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .frame(width: 62, alignment: .trailing)
+    }
+
+    private func headerCell(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .frame(width: 62, alignment: .trailing)
     }
 
     // MARK: - Errors table
@@ -163,17 +267,19 @@ struct GuardrailsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Errors").font(.headline)
             Table(rows.sorted(using: errorSort), sortOrder: $errorSort) {
-                TableColumn("Category", value: \.errorCategory) { row in
-                    Text(row.errorCategory).help(row.detail ?? "")
+                TableColumn("Category") { row in
+                    // Optional on the wire: an unfixed failure need not be
+                    // categorised, and "—" is honest where "unknown" invents one.
+                    Text(row.errorCategory ?? "—").help(row.detail ?? "")
                 }
                 TableColumn("Tool") { row in
                     Text(row.toolName ?? "—").foregroundStyle(.secondary)
                 }
                 .width(min: 100, ideal: 140)
-                TableColumn("Model", value: \.model) { row in
-                    Text(row.model).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                TableColumn("Model", value: \.label) { row in
+                    Text(row.label).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
-                .width(min: 100, ideal: 140)
+                .width(min: 140, ideal: 190)
                 TableColumn("Count", value: \.count) { row in
                     Text("\(row.count)").monospacedDigit()
                 }

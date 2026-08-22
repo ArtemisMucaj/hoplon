@@ -139,10 +139,44 @@ final class AppState {
         }
     }
     /// Backend base URL the proxy forwards to (`--backend`).
+    ///
+    /// Only a *seed*: guardrails writes `~/.guardrails/config.json` on first run
+    /// and that file then wins over the flags, so this is what a fresh install
+    /// starts with. Providers are added, removed and re-pointed afterwards
+    /// through the management API — Settings ▸ Guardrails ▸ Providers.
     var guardrailsBackend: String {
         didSet {
             UserDefaults.standard.set(guardrailsBackend, forKey: "guardrailsBackend")
             guardrailsManager.backend = guardrailsBackend
+            restartGuardrailsIfRunning()
+        }
+    }
+    /// Proxy GitHub Copilot models with a Copilot subscription (`--copilot`).
+    ///
+    /// A flag rather than a provider entry: Copilot needs an OAuth credential
+    /// and GitHub's client-identity headers, which no `--backend URL` can carry,
+    /// so the proxy has to be started knowing about it. Authorization itself is
+    /// the device flow on the Providers pane.
+    var guardrailsCopilot: Bool {
+        didSet {
+            UserDefaults.standard.set(guardrailsCopilot, forKey: "guardrailsCopilot")
+            guardrailsManager.copilot = guardrailsCopilot
+            restartGuardrailsIfRunning()
+        }
+    }
+    /// Reconstruct conversations from Chat Completions traffic
+    /// (`--match-conversations`), so token metrics count a resent transcript
+    /// once instead of once per turn.
+    ///
+    /// Off by default upstream, and left off here: it is the only thing that
+    /// makes the metrics path read message content — to hash it, never to store
+    /// it — and the grouping it produces is approximate.
+    var guardrailsMatchConversations: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                guardrailsMatchConversations, forKey: "guardrailsMatchConversations"
+            )
+            guardrailsManager.matchConversations = guardrailsMatchConversations
             restartGuardrailsIfRunning()
         }
     }
@@ -343,11 +377,22 @@ final class AppState {
         // corrupt persisted value collides with the listen port.
         if grAdminPort == grPort { grAdminPort = grPort == 65535 ? grPort - 1 : grPort + 1 }
         let grBackend = UserDefaults.standard.string(forKey: "guardrailsBackend") ?? "http://127.0.0.1:1234"
+        // Both default to false, matching the proxy's own defaults.
+        let grCopilot = UserDefaults.standard.bool(forKey: "guardrailsCopilot")
+        let grMatch   = UserDefaults.standard.bool(forKey: "guardrailsMatchConversations")
         self.guardrailsEnabled   = UserDefaults.standard.bool(forKey: "guardrailsEnabled")
         self.guardrailsPort      = grPort
         self.guardrailsAdminPort = grAdminPort
         self.guardrailsBackend   = grBackend
-        self.guardrailsManager   = GuardrailsManager(listenPort: grPort, adminPort: grAdminPort, backend: grBackend)
+        self.guardrailsCopilot   = grCopilot
+        self.guardrailsMatchConversations = grMatch
+        self.guardrailsManager   = GuardrailsManager(
+            listenPort: grPort,
+            adminPort: grAdminPort,
+            backend: grBackend,
+            copilot: grCopilot,
+            matchConversations: grMatch
+        )
 
         // Memory settings (fall back to memory-rs's own `serve` default).
         let savedMemPort = UserDefaults.standard.integer(forKey: "memoryPort")

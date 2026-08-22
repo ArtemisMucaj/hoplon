@@ -15,6 +15,30 @@ class GuardrailsManager {
     var isReachable = false
     var stats: GuardrailsStats?
     var info: GuardrailsInfo?
+    /// Per-day totals behind the contribution graph. Always fetched over the
+    /// full window (`graphDays`), never the selected period — the graph is how
+    /// a period is *chosen*, so narrowing it to the current selection would
+    /// leave nothing else to click.
+    var activity: [DayActivity] = []
+
+    /// The window every figure on the screen is computed over.
+    ///
+    /// Owned by the manager rather than the view: the 5s poll re-renders the
+    /// detail column, and view-owned state gets wiped by it.
+    var period: GuardrailsPeriod = .last30Days {
+        didSet {
+            guard period != oldValue else { return }
+            // The rollup is window-scoped, so it must be refetched; the graph
+            // spans the whole history and does not move.
+            if isRunning { fetchStats() }
+        }
+    }
+
+    /// Days the contribution graph spans.
+    let graphDays = 120
+
+    /// Providers and Copilot login, driving the Guardrails settings pane.
+    let providers = GuardrailsProvidersManager()
 
     /// One rollup sample per stats poll, powering the session sparklines.
     struct Sample: Identifiable {
@@ -39,11 +63,23 @@ class GuardrailsManager {
     var listenPort: Int
     var adminPort: Int
     var backend: String
+    /// Proxy GitHub Copilot models (`--copilot`).
+    var copilot: Bool
+    /// Infer Chat Completions conversations (`--match-conversations`).
+    var matchConversations: Bool
 
-    init(listenPort: Int = 8080, adminPort: Int = 8081, backend: String = "http://127.0.0.1:1234") {
+    init(
+        listenPort: Int = 8080,
+        adminPort: Int = 8081,
+        backend: String = "http://127.0.0.1:1234",
+        copilot: Bool = false,
+        matchConversations: Bool = false
+    ) {
         self.listenPort = listenPort
         self.adminPort = adminPort
         self.backend = backend
+        self.copilot = copilot
+        self.matchConversations = matchConversations
     }
 
     /// The OpenAI-compatible endpoint clients point at instead of the backend.
@@ -99,11 +135,7 @@ class GuardrailsManager {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
-        proc.arguments = [
-            "--listen", "127.0.0.1:\(listenPort)",
-            "--admin-listen", "127.0.0.1:\(adminPort)",
-            "--backend", backend,
-        ]
+        proc.arguments = launchArguments()
         proc.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
         proc.environment = ProxyManager.shellEnvironment
         processLogHandle = logHandle(for: logURL)
@@ -122,6 +154,55 @@ class GuardrailsManager {
             }
             print("❌ Failed to start guardrails: \(error)")
         }
+    }
+
+    /// The proxy's command line.
+    ///
+    /// The backend flags are a **seed**, not the source of truth: guardrails
+    /// writes `~/.guardrails/config.json` on first run and that file then wins
+    /// over whatever flags the launcher passes, so these only shape a fresh
+    /// install. Providers are changed afterwards through the management API
+    /// (Settings ▸ Guardrails ▸ Providers), which applies to the live registry
+    /// and persists in one call — no restart, and no risk of the flags and the
+    /// running proxy disagreeing.
+    ///
+    /// `--copilot` is the exception that must stay a flag: Copilot needs an
+    /// OAuth credential and GitHub's client-identity headers, which no
+    /// `--backend URL` can express, so the process has to start knowing about it.
+    func launchArguments() -> [String] {
+        var args = [
+            "--listen", "127.0.0.1:\(listenPort)",
+            "--admin-listen", "127.0.0.1:\(adminPort)",
+        ]
+        // Repeated rather than comma-joined: a URL may contain a comma (a query
+        // parameter), and the flag's env-var form is the only place upstream
+        // splits on one.
+        for spec in Self.backendSpecs(backend) {
+            args.append(contentsOf: ["--backend", spec])
+        }
+        if copilot { args.append("--copilot") }
+        if matchConversations { args.append("--match-conversations") }
+        return args
+    }
+
+    /// Split the configured backend setting into one spec per provider.
+    ///
+    /// Accepts a single URL (the common case, which upstream names `default`),
+    /// or several `NAME=URL` entries separated by newlines or commas. Blank
+    /// entries are dropped so a trailing separator is not an error.
+    ///
+    /// Note that only the *first* backend may be anonymous upstream; the rest
+    /// must be named, so their metrics can be told apart. A user who writes two
+    /// bare URLs gets that error from the proxy, which states it better than a
+    /// guess here would.
+    static func backendSpecs(_ setting: String) -> [String] {
+        let specs = setting
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        // An empty setting is rejected before launch, but returning the raw
+        // value keeps this total rather than silently dropping the flag.
+        return specs.isEmpty ? [setting] : specs
     }
 
     func stop() {
@@ -143,17 +224,20 @@ class GuardrailsManager {
         // or port) never shows stale numbers.
         stats = nil
         info = nil
+        activity.removeAll()
+        providers.reset()
         history.removeAll()
         sampleIndex = 0
     }
 
     // MARK: - Admin polling
 
-    /// Fetch /healthz, /info, and /stats from the admin server once.
+    /// Fetch /healthz, /info, /stats and /activity from the admin server once.
     func refresh() {
         fetchHealth()
         fetchInfo()
         fetchStats()
+        fetchActivity()
     }
 
     private func fetchHealth() {
@@ -181,8 +265,29 @@ class GuardrailsManager {
         }.resume()
     }
 
+    /// Per-day totals for the contribution graph.
+    ///
+    /// Deliberately unbounded by `period`: the graph is the control a period is
+    /// picked *with*, so scoping it to the current selection would collapse it
+    /// to the days already chosen.
+    private func fetchActivity() {
+        guard let url = URL(string: "\(adminBase)/activity?days=\(graphDays)") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            guard let self else { return }
+            if error != nil { return }
+            guard let data,
+                  let parsed = try? JSONDecoder().decode(GuardrailsActivity.self, from: data)
+            else { return }
+            DispatchQueue.main.async {
+                if self.activity != parsed.days { self.activity = parsed.days }
+            }
+        }.resume()
+    }
+
     private func fetchStats() {
-        guard let url = URL(string: "\(adminBase)/stats") else { return }
+        guard let url = URL(string: "\(adminBase)/stats\(period.query)") else { return }
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
@@ -247,6 +352,8 @@ class GuardrailsManager {
         processSource = nil
         stats = nil
         info = nil
+        activity.removeAll()
+        providers.reset()
         history.removeAll()
         sampleIndex = 0
     }

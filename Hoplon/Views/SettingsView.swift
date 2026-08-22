@@ -86,9 +86,29 @@ private struct CloseTrafficLight: View {
 /// sidebar.
 enum SettingsItem: Hashable {
     case service(AppSection)
+    case guardrailsPane(GuardrailsPane)
     case memoryPane(MemoryPane)
     case codePane(CodePane)
     case commandLine
+}
+
+/// The Guardrails settings sub-panes.
+enum GuardrailsPane: String, CaseIterable, Identifiable, Hashable {
+    case process, providers
+    /// Namespaced — see the note on `CodePane.id`.
+    var id: String { "guardrails.\(rawValue)" }
+    var title: String {
+        switch self {
+        case .process:   return "Process"
+        case .providers: return "Providers"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .process:   return "gearshape.2"
+        case .providers: return "server.rack"
+        }
+    }
 }
 
 /// The Code Intelligence settings sub-panes.
@@ -154,6 +174,10 @@ struct SettingsView: View {
                     Section("Services") {
                         serviceRow(.proxy)
                         serviceRow(.guardrails)
+                        // Guardrails sub-panes, nested like the main UI.
+                        ForEach(GuardrailsPane.allCases) { pane in
+                            guardrailsPaneRow(pane)
+                        }
                         serviceRow(.memory)
                         // Memory sub-panes, nested like the main UI.
                         ForEach(MemoryPane.allCases) { pane in
@@ -219,6 +243,17 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func guardrailsPaneRow(_ pane: GuardrailsPane) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
+            Text(pane.title).lineLimit(1)
+            Spacer()
+        }
+        .padding(.leading, 18)
+        .tag(SettingsItem.guardrailsPane(pane))
+    }
+
+    @ViewBuilder
     private func memoryPaneRow(_ pane: MemoryPane) -> some View {
         HStack(spacing: 8) {
             Image(systemName: pane.icon).font(.caption2).foregroundStyle(.secondary).frame(width: 14)
@@ -246,7 +281,9 @@ struct SettingsView: View {
     private var detailPane: some View {
         switch selection {
         case .service(.proxy):      ProxySettingsPane()
-        case .service(.guardrails): GuardrailsSettingsPane()
+        case .service(.guardrails): GuardrailsSettingsPane()     // section row → Process
+        case .guardrailsPane(.process):   GuardrailsSettingsPane()
+        case .guardrailsPane(.providers): GuardrailsProvidersPane()
         case .service(.memory):     MemoryProcessPane()      // section row → Process
         case .service(.code):       CodeProcessPane()         // section row → Process
         case .memoryPane(.process): MemoryProcessPane()
@@ -345,10 +382,27 @@ private struct GuardrailsSettingsPane: View {
                         .textFieldStyle(.roundedBorder)
                     Text("Point your client at http://127.0.0.1:\(state.guardrailsPort)/v1. Metrics are served on the admin port.")
                         .font(.caption).foregroundStyle(.secondary)
+                    // Says plainly that this field stops mattering after the
+                    // first run, so nobody edits it expecting the running proxy
+                    // to follow.
+                    Text("Used to seed the configuration on first run. After that, manage providers under Guardrails ▸ Providers — the proxy's own config file takes precedence over this.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if state.guardrailsPort == state.guardrailsAdminPort {
                         Label("Listen and Admin ports must be different.", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption).foregroundStyle(.red)
                     }
+                }
+                Section("Models") {
+                    Toggle("Proxy GitHub Copilot models", isOn: $state.guardrailsCopilot)
+                    Text("Serves Copilot models through the proxy using your subscription. Authorize under Guardrails ▸ Providers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Metrics") {
+                    Toggle("Group Chat Completions into conversations", isOn: $state.guardrailsMatchConversations)
+                    // The honest version of the trade-off: it is the only thing
+                    // that makes the metrics path read message content at all.
+                    Text("Counts a resent transcript once instead of once per turn, so token totals reflect the conversation rather than the sum of its turns. Reads message text to hash it — nothing is stored — and the grouping is approximate, so figures derived from it are marked as such.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
