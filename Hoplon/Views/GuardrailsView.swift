@@ -82,15 +82,23 @@ struct GuardrailsView: View {
                 title: "Guardrails is stopped",
                 message: "Start the proxy to repair malformed tool calls from your local model and collect metrics."
             )
-        } else if let stats = manager.stats, !stats.isEmpty || !manager.activity.isEmpty {
+        } else if manager.stats?.isEmpty == false || !manager.activity.isEmpty {
+            // Either source is enough to show the screen. `/stats` and
+            // `/activity` are fetched independently, so requiring a rollup hid
+            // the calendar whenever the rollup was slower or failing — the
+            // graph would sit behind "No metrics yet" with its data already in
+            // hand. The rollup-derived sections still render only when there is
+            // a rollup.
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     activitySection
                     periodPicker
-                    summaryCards(stats)
-                    if !stats.measured.isEmpty { tokensSection(stats) }
-                    if !stats.perModel.isEmpty { perModelSection(stats.perModel) }
-                    if !stats.errors.isEmpty { errorsSection(stats.errors) }
+                    if let stats = manager.stats, !stats.isEmpty {
+                        summaryCards(stats)
+                        if !stats.measured.isEmpty { tokensSection(stats) }
+                        if !stats.perModel.isEmpty { perModelSection(stats.perModel) }
+                        if !stats.errors.isEmpty { errorsSection(stats.errors) }
+                    }
                     if let info = manager.info { infoSection(info) }
                 }
                 .padding()

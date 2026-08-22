@@ -208,6 +208,13 @@ class GuardrailsProvidersManager {
     }
 
     func startCopilotLogin() async {
+        // Marked busy so the row shows progress while the device-flow request
+        // runs. Without it a second tap starts a *second* flow: the server
+        // issues a fresh code and the one already displayed — possibly already
+        // typed into GitHub — stops working.
+        guard !busy.contains(Self.copilotProvider) else { return }
+        busy.insert(Self.copilotProvider)
+        defer { busy.remove(Self.copilotProvider) }
         do {
             copilot = try await client.startCopilotLogin()
             startPolling()
@@ -245,6 +252,13 @@ class GuardrailsProvidersManager {
     /// configuration.
     func reset() {
         stopPolling()
+        // Cancel the serial queue too: a `load()` or `mutate()` already in
+        // flight completes after this and assigns its snapshot back, which is
+        // exactly the stale configuration this exists to clear. `stop()` and
+        // `markStopped()` both call it, so it happens whenever the proxy stops
+        // while the pane is loading.
+        queue?.cancel()
+        queue = nil
         providers = []
         lastError = nil
         isUnavailable = false
