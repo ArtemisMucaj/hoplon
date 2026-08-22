@@ -138,6 +138,14 @@ struct GuardrailsProvidersPane: View {
                         .font(.caption).foregroundStyle(.tertiary)
                         .help("Only models this provider is currently offering. A model that disappears keeps whatever you chose for it and reappears here if the provider offers it again.")
                     Spacer()
+                    // Both act on the *live* catalogue, which is the only set
+                    // this screen knows about — so neither is disabled by
+                    // comparing against it. `exposedCount == models.count` looks
+                    // like "nothing left to expose", but a provider that has
+                    // stopped offering some models still holds `false` for them:
+                    // All would be greyed out while models stay hidden, with no
+                    // way to undo an earlier None. Disabled only while a change
+                    // is in flight.
                     Button("All") {
                         Task {
                             await providers.setModelsExposed(
@@ -146,7 +154,7 @@ struct GuardrailsProvidersPane: View {
                         }
                     }
                     .controlSize(.small)
-                    .disabled(provider.exposedCount == provider.models.count)
+                    .help("Serve every model this provider currently offers.")
                     Button("None") {
                         Task {
                             await providers.setModelsExposed(
@@ -155,7 +163,7 @@ struct GuardrailsProvidersPane: View {
                         }
                     }
                     .controlSize(.small)
-                    .disabled(provider.exposedCount == 0)
+                    .help("Hide every model this provider currently offers. Each is recorded as an explicit choice, so turning \"Expose new models automatically\" back on will not re-expose them — use All for that.")
                 }
                 .disabled(providers.busy.contains(provider.name))
 
