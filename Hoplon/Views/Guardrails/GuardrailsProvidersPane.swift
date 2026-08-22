@@ -17,8 +17,8 @@ struct GuardrailsProvidersPane: View {
     @State private var showingAdd = false
     @State private var newName = ""
     @State private var newBaseURL = ""
-    @State private var newUnversioned = false
     @State private var confirmingRemoval: String?
+    @State private var enablingCopilot = false
 
     private var manager: GuardrailsManager { state.guardrailsManager }
     private var providers: GuardrailsProvidersManager { manager.providers }
@@ -51,7 +51,7 @@ struct GuardrailsProvidersPane: View {
                 }
                 Section {
                     Button {
-                        newName = ""; newBaseURL = ""; newUnversioned = false
+                        newName = ""; newBaseURL = ""
                         showingAdd = true
                     } label: {
                         Label("Add Provider", systemImage: "plus")
@@ -213,41 +213,64 @@ struct GuardrailsProvidersPane: View {
     /// `CopilotSignInRow` drives the same server-side device flow, so it reads
     /// and behaves identically wherever it appears.
     ///
-    /// Signing in *is* the decision to proxy Copilot — there is no separate
-    /// "enable" toggle, because a signed-in subscription nobody wanted proxied
-    /// is not a state worth modelling. Which of its models are served is then
-    /// the same per-model choice every other provider gets, in the section
-    /// below.
+    /// Always shown, never gated on the proxy already running with `--copilot`.
+    /// Those routes 404 until the flag is set, so a section that hid itself
+    /// when they did would be invisible exactly when a user goes looking for
+    /// it — which is what "where is the GitHub Copilot setting?" means.
+    ///
+    /// Signing in *is* the decision to proxy Copilot: it sets the flag, waits
+    /// for the proxy to come back, and then starts the device flow. Which of
+    /// its models are served is afterwards the same per-model choice every
+    /// other provider gets, in the section below.
     @ViewBuilder
     private var copilotSection: some View {
-        if !providers.copilotUnavailable {
-            Section("GitHub Copilot") {
-                if providers.copilot?.state == .authorized {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("GitHub Copilot").font(.callout.weight(.medium))
-                            Text("Signed in — Copilot models are proxied")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
-                        Button("Sign out", action: signOutCopilot).controlSize(.small)
+        Section("GitHub Copilot") {
+            if providers.copilot?.state == .authorized {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("GitHub Copilot").font(.callout.weight(.medium))
+                        Text("Signed in — pick its models below")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                } else {
-                    CopilotSignInRow(
-                        login: providers.copilot,
-                        isStarting: providers.busy.contains(GuardrailsProvidersManager.copilotProvider)
-                    ) {
-                        Task { await providers.startCopilotLogin() }
-                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                }
+            } else {
+                CopilotSignInRow(login: providers.copilot, isStarting: enablingCopilot) {
+                    signInToCopilot()
+                }
+                if !state.guardrailsCopilot {
+                    Text("Signing in restarts the proxy so it can carry your Copilot credential.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
     }
 
-    private func signOutCopilot() {
-        Task { await providers.remove(GuardrailsProvidersManager.copilotProvider) }
+    /// Turn on `--copilot` if it is off, then start the device flow.
+    ///
+    /// The flag has to be set before the login routes exist at all, and setting
+    /// it restarts the proxy — so the flow waits for the admin server to answer
+    /// again rather than firing a request at a port that is still rebinding.
+    private func signInToCopilot() {
+        guard !enablingCopilot else { return }
+        if state.guardrailsCopilot {
+            Task { await providers.startCopilotLogin() }
+            return
+        }
+        enablingCopilot = true
+        state.guardrailsCopilot = true
+        Task {
+            defer { enablingCopilot = false }
+            // Wait for the restarted proxy, then reload through the new port.
+            for _ in 0..<40 {
+                try? await Task.sleep(for: .milliseconds(250))
+                if manager.isRunning, await providers.isReachable() { break }
+            }
+            providers.adminBase = manager.adminBase
+            await providers.startCopilotLogin()
+            await providers.load()
+        }
     }
 
     // MARK: - Add sheet
@@ -258,8 +281,6 @@ struct GuardrailsProvidersPane: View {
             Form {
                 TextField("Name", text: $newName, prompt: Text("lmstudio"))
                 TextField("Base URL", text: $newBaseURL, prompt: Text("http://127.0.0.1:1234"))
-                Toggle("Routes served at the root (no /v1)", isOn: $newUnversioned)
-                    .help("For upstreams that serve /chat/completions rather than /v1/chat/completions.")
             }
             .formStyle(.grouped)
             Text("The name identifies this provider in the metrics, so it must be unique.")
@@ -271,7 +292,7 @@ struct GuardrailsProvidersPane: View {
                     let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
                     let url = newBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     showingAdd = false
-                    Task { await providers.add(name: name, baseURL: url, unversioned: newUnversioned) }
+                    Task { await providers.add(name: name, baseURL: url) }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(

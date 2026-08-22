@@ -108,11 +108,17 @@ class GuardrailsProvidersManager {
         await mutate(name) { try await self.client.updateProvider(name, models: update) }
     }
 
-    func add(name: String, baseURL: String, unversioned: Bool) async {
+    /// Add a provider.
+    ///
+    /// `unversioned` is not surfaced: it describes whether an upstream serves
+    /// its routes at the root instead of under `/v1`, which is a wire-format
+    /// detail of that server, not a decision a user makes about it. Nearly
+    /// every OpenAI-compatible server uses `/v1`, and the one that does not
+    /// (Copilot) is configured by the proxy itself. A hand-edit of
+    /// `config.json` remains available for the rare exception.
+    func add(name: String, baseURL: String) async {
         await mutate(name) {
-            try await self.client.addProvider(
-                name: name, baseURL: baseURL, unversioned: unversioned
-            )
+            try await self.client.addProvider(name: name, baseURL: baseURL)
         }
     }
 
@@ -143,6 +149,12 @@ class GuardrailsProvidersManager {
                 providers = (try? await client.providers()) ?? providers
             }
         }
+    }
+
+    /// Whether the admin server is answering yet — used after a restart, so a
+    /// request is not fired at a port that is still rebinding.
+    func isReachable() async -> Bool {
+        (try? await client.providers()) != nil
     }
 
     // MARK: - Copilot

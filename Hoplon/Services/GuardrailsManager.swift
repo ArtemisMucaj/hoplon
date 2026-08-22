@@ -37,8 +37,9 @@ class GuardrailsManager {
         }
     }
 
-    /// Days the contribution graph spans.
-    let graphDays = 120
+    /// Days the contribution graph spans — a full year, as a contribution
+    /// calendar conventionally shows. Well under the server's 1100-day cap.
+    let graphDays = 371
 
     /// Bumped whenever an in-flight metrics response becomes obsolete — the
     /// proxy stopped, or the period changed.

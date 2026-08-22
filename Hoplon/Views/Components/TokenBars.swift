@@ -40,6 +40,37 @@ struct TokenBars: View {
     /// Tallest bar, so every row's width is comparable.
     private var rowHeight: CGFloat { 34 }
 
+    @State private var hovered: ModelStat?
+
+    /// The model whose bar sits under `point`.
+    ///
+    /// Resolved through the y scale rather than by dividing the height: the
+    /// chart reserves space for the legend and axis, so arithmetic on the frame
+    /// drifts by a row near the edges.
+    private func model(at point: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> ModelStat? {
+        guard let plot = proxy.plotFrame else { return nil }
+        let origin = geometry[plot].origin
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        guard let label: String = proxy.value(atY: local.y) else { return nil }
+        return models.first { $0.label == label }
+    }
+
+    /// One line carrying every figure the bar encodes, exactly.
+    static func summary(_ model: ModelStat) -> String {
+        guard let u = model.usage else { return model.label }
+        var parts = [
+            "\(u.billedTokens.formatted()) tokens",
+            "\(u.cachedTokens.formatted()) cached",
+            "\(u.uncachedPromptTokens.formatted()) billed prompt",
+            "\(u.completionTokens.formatted()) completion",
+        ]
+        if let hit = u.cacheHitRate {
+            parts.append("\(Int((hit * 100).rounded()))% cache hit")
+        }
+        parts.append("\(u.requests.formatted()) request\(u.requests == 1 ? "" : "s")")
+        return "\(model.label) — " + parts.joined(separator: ", ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Chart(segments) { segment in
@@ -49,8 +80,6 @@ struct TokenBars: View {
                 )
                 .foregroundStyle(by: .value("Kind", segment.kind))
                 .cornerRadius(3)
-                // A stacked bar shows proportion; the exact count has to be
-                // readable somewhere, and the axis only gives a rounded scale.
                 .accessibilityLabel("\(segment.label), \(segment.kind)")
                 .accessibilityValue(segment.tokens.formatted())
             }
@@ -75,7 +104,32 @@ struct TokenBars: View {
                 }
             }
             .chartLegend(position: .bottom, spacing: 12)
+            // Hover readout. A stacked bar shows proportion, not amount, and
+            // the axis only gives a rounded scale — so the exact split has to
+            // be reachable with the pointer. `.help()` on a `BarMark` does
+            // nothing (a mark is not a view), and an accessibility label only
+            // reaches VoiceOver; the overlay is what a mouse can actually hit.
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let point):
+                                hovered = model(at: point, proxy: proxy, geometry: geo)
+                            case .ended:
+                                hovered = nil
+                            }
+                        }
+                }
+            }
             .frame(height: max(CGFloat(models.count) * rowHeight + 44, 120))
+
+            // Reserves its line whether or not anything is hovered, so the
+            // rows below do not jump as the pointer crosses the chart.
+            Text(hovered.map { Self.summary($0) } ?? " ")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
             perModelDetail
         }
@@ -105,6 +159,15 @@ struct TokenBars: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
+                    // The whole row is a hit target, so the stat tooltips fire
+                    // anywhere along it rather than only on the digits, and
+                    // hovering here highlights the matching bar above.
+                    .contentShape(Rectangle())
+                    .onHover { hovered = $0 ? model : (hovered?.id == model.id ? nil : hovered) }
+                    .background(
+                        hovered?.id == model.id
+                            ? Color.accentColor.opacity(0.06) : Color.clear
+                    )
                     if index != models.count - 1 { Divider() }
                 }
             }
