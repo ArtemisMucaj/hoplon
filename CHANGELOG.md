@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.7.0...hoplon-v0.8.0) (2026-08-22)
+
+
+### Features
+
+* **guardrails:** windowed metrics, a token calendar, and a providers pane ([#33](https://github.com/ArtemisMucaj/hoplon/issues/33)) ([23fe00a](https://github.com/ArtemisMucaj/hoplon/commit/23fe00a7dd258220eca83e4dfbf180c26cb3d246))
+
 ## [0.7.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.6.0...hoplon-v0.7.0) (2026-08-13)
 
 
