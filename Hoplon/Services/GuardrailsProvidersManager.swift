@@ -108,6 +108,23 @@ class GuardrailsProvidersManager {
         await mutate(name) { try await self.client.updateProvider(name, models: update) }
     }
 
+    /// Serve everything this provider offers, now and later.
+    ///
+    /// Clears the stored decisions rather than setting the visible models true.
+    /// The two are not equivalent: decisions outlive the model, so a provider
+    /// that has stopped offering something keeps it stored — and naming only
+    /// what is currently visible leaves those stranded hidden with no way back
+    /// from this screen. That is how a "None" taken while Copilot offered 39
+    /// models left 13 unreachable once the catalogue shrank to 26.
+    ///
+    /// Clearing also restores the intent of `expose_by_default`, so a model the
+    /// provider starts offering later is served without another visit here.
+    func exposeAllModels(_ name: String) async {
+        await mutate(name) {
+            try await self.client.updateProvider(name, clearModels: true)
+        }
+    }
+
     /// Add a provider.
     ///
     /// `unversioned` is not surfaced: it describes whether an upstream serves

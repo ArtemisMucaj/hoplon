@@ -117,9 +117,11 @@ struct GuardrailsClient {
         _ name: String,
         models: [String: Bool] = [:],
         enabled: Bool? = nil,
-        exposeByDefault: Bool? = nil
+        exposeByDefault: Bool? = nil,
+        clearModels: Bool = false
     ) async throws -> [ProviderConfig] {
         var payload: [String: Any] = [:]
+        if clearModels { payload["clear_models"] = true }
         if !models.isEmpty { payload["models"] = models }
         if let enabled { payload["enabled"] = enabled }
         if let exposeByDefault { payload["expose_by_default"] = exposeByDefault }

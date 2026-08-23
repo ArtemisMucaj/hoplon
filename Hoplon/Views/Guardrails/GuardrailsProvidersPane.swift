@@ -147,14 +147,10 @@ struct GuardrailsProvidersPane: View {
                     // way to undo an earlier None. Disabled only while a change
                     // is in flight.
                     Button("All") {
-                        Task {
-                            await providers.setModelsExposed(
-                                provider.name, models: provider.models.map(\.id), exposed: true
-                            )
-                        }
+                        Task { await providers.exposeAllModels(provider.name) }
                     }
                     .controlSize(.small)
-                    .help("Serve every model this provider currently offers.")
+                    .help("Serve every model this provider offers, including any it starts offering later. Clears the per-model choices rather than setting only the ones listed here, so nothing stays hidden that this screen cannot see.")
                     Button("None") {
                         Task {
                             await providers.setModelsExposed(
