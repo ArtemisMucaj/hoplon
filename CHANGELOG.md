@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.8.0...hoplon-v0.9.0) (2026-08-23)
+
+
+### Features
+
+* **guardrails:** pin v0.14.0 for the read-before-edit guard ([#36](https://github.com/ArtemisMucaj/hoplon/issues/36)) ([7b6d703](https://github.com/ArtemisMucaj/hoplon/commit/7b6d703465a21004b6e9821c55a093115eadbfbb))
+
 ## [0.8.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.7.0...hoplon-v0.8.0) (2026-08-22)
 
 
