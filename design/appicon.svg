@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#211D18"/>
+      <stop offset="1" stop-color="#0D0B09"/>
+    </linearGradient>
+    <linearGradient id="bronze" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0"    stop-color="#F5EFE2"/>
+      <stop offset="0.55" stop-color="#DCD2BC"/>
+      <stop offset="1"    stop-color="#B9AB8C"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0"    stop-color="#FFFBF1"/>
+      <stop offset="0.55" stop-color="#E8DFCB"/>
+      <stop offset="1"    stop-color="#C8BB9D"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#plate)"/>
+
+  <!-- outer rim of the shield -->
+  <circle cx="512" cy="512" r="336" fill="url(#rim)"/>
+  <!-- the face, a half-tone step in from the rim -->
+  <circle cx="512" cy="512" r="286" fill="url(#bronze)"/>
+  <!-- the boss -->
+  <circle cx="512" cy="512" r="106" fill="#14120F"/>
+</svg>
