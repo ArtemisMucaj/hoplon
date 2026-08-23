@@ -21,11 +21,18 @@ set -euo pipefail
 # v0.12.1 fixes the Copilot provider disappearing from /v1/models after any
 # change made through the providers pane — its config entry kept
 # `unversioned: false`, so every rebuild targeted /v1 and got a 404.
+
+# v0.14.0 adds the read-before-edit guard: an in-place edit whose target the
+# conversation never shows being read is refused before it reaches the harness,
+# because such an edit is matched against remembered contents rather than the
+# file. Nothing the app drives moved — the guard rides the existing
+# `write_refused` outcome, which /stats already reports — so this pin is a
+# behaviour upgrade for anything proxying through Hoplon, not an API change.
 #
 # The version is pinned so the bundled binary is reproducible. Override with:
 #   GUARDRAILS_VERSION=latest bash scripts/download_guardrails_binary.sh
 
-GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.13.0}"
+GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.14.0}"
 GUARDRAILS_ASSET="${GUARDRAILS_ASSET:-guardrail-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"
