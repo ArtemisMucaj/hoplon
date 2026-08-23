@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.10.0...hoplon-v0.10.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* **sign:** grant codesearch disable-library-validation ([#40](https://github.com/ArtemisMucaj/hoplon/issues/40)) ([3f35d8f](https://github.com/ArtemisMucaj/hoplon/commit/3f35d8fef32439baada0027c4598badc41dd366e))
+
 ## [0.10.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.9.0...hoplon-v0.10.0) (2026-08-23)
 
 
