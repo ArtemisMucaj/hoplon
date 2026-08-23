@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.9.0...hoplon-v0.10.0) (2026-08-23)
+
+
+### Features
+
+* **icon:** redraw the app icon as a round hoplon shield ([#38](https://github.com/ArtemisMucaj/hoplon/issues/38)) ([3b86dc6](https://github.com/ArtemisMucaj/hoplon/commit/3b86dc64747e2df712ee1789589eafe50b548911))
+
 ## [0.9.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.8.0...hoplon-v0.9.0) (2026-08-23)
 
 
