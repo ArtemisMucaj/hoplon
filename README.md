@@ -48,10 +48,11 @@ bash scripts/fetch_binaries.sh
 xcodebuild -project Hoplon.xcodeproj -scheme Hoplon -configuration Debug build
 ```
 
-Downloads are pinned to a release and SHA-256 verified against its manifest —
-codesearch to v2.2.0, memory-rs to v0.3.0. A sibling checkout is only the
-fallback if a download fails; clone the repo beside this one, or set
-`MEMORY_REPO` / `CODESEARCH_REPO`.
+Downloads are pinned to a release and SHA-256 verified against its manifest:
+panoply v0.2.0, guardrail v0.13.0, memory-rs v0.3.1, codesearch v2.4.0. A
+sibling checkout is only the fallback if a download fails; clone the repo beside
+this one, or set `PANOPLY_REPO` / `GUARDRAILS_REPO` / `MEMORY_REPO` /
+`CODESEARCH_REPO`.
 
 Requires Xcode 26.2+ and macOS 26.2+.
 

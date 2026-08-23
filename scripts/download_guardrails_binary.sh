@@ -25,7 +25,7 @@ set -euo pipefail
 # The version is pinned so the bundled binary is reproducible. Override with:
 #   GUARDRAILS_VERSION=latest bash scripts/download_guardrails_binary.sh
 
-GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.12.1}"
+GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.13.0}"
 GUARDRAILS_ASSET="${GUARDRAILS_ASSET:-guardrail-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"

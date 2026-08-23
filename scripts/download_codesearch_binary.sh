@@ -12,7 +12,7 @@ set -euo pipefail
 # Override the pin with:
 #   CODESEARCH_VERSION=latest bash scripts/download_codesearch_binary.sh
 
-CODESEARCH_VERSION="${CODESEARCH_VERSION:-v2.2.0}"
+CODESEARCH_VERSION="${CODESEARCH_VERSION:-v2.4.0}"
 CODESEARCH_ASSET="${CODESEARCH_ASSET:-codesearch-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"

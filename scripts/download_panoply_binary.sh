@@ -12,7 +12,7 @@ set -euo pipefail
 # The version is pinned so the bundled binary is reproducible. Override with:
 #   PANOPLY_VERSION=latest bash scripts/download_panoply_binary.sh
 
-PANOPLY_VERSION="${PANOPLY_VERSION:-v0.1.3}"
+PANOPLY_VERSION="${PANOPLY_VERSION:-v0.2.0}"
 PANOPLY_ASSET="${PANOPLY_ASSET:-panoply-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"

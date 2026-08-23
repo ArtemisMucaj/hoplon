@@ -12,8 +12,8 @@ set -euo pipefail
 # Vendor from a local checkout instead (unreleased skill edits):
 #   SKILLS_SOURCE_DIR=../codesearch bash scripts/download_codesearch_skills.sh
 
-CODESEARCH_SKILLS_TAG="${CODESEARCH_SKILLS_TAG:-v2.2.0}"
-CODESEARCH_SKILLS_COMMIT="${CODESEARCH_SKILLS_COMMIT:-88b6231347880a1ba3677eece8befe29e0505495}"
+CODESEARCH_SKILLS_TAG="${CODESEARCH_SKILLS_TAG:-v2.4.0}"
+CODESEARCH_SKILLS_COMMIT="${CODESEARCH_SKILLS_COMMIT:-b5b17343bbc8e136f43fc073d05a526b1373907b}"
 
 source "$(dirname "$0")/lib/fetch_skills.sh"
 fetch_skills "ArtemisMucaj/codesearch" \

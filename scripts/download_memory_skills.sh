@@ -11,8 +11,8 @@ set -euo pipefail
 # Vendor from a local checkout instead (unreleased skill edits):
 #   SKILLS_SOURCE_DIR=../memory-rs bash scripts/download_memory_skills.sh
 
-MEMORY_SKILLS_TAG="${MEMORY_SKILLS_TAG:-v0.3.0}"
-MEMORY_SKILLS_COMMIT="${MEMORY_SKILLS_COMMIT:-f5835226cf96fa46e6900a529cc36827c4798628}"
+MEMORY_SKILLS_TAG="${MEMORY_SKILLS_TAG:-v0.3.1}"
+MEMORY_SKILLS_COMMIT="${MEMORY_SKILLS_COMMIT:-a05c78da6420188b6677efc7df6253dc1f5a834f}"
 
 source "$(dirname "$0")/lib/fetch_skills.sh"
 fetch_skills "ArtemisMucaj/memory-rs" \
