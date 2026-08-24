@@ -239,14 +239,16 @@ struct LlmView: View {
             // Re-read them rather than trying to recompute the fallback here.
             loadUsages()
         } catch let error as CodesearchClient.ClientError {
-            // codesearch served this route PUT-only through v2.4.0. Reporting the
-            // raw 405 would read as a bug in Hoplon rather than a bundled binary
-            // that predates the route (added in ArtemisMucaj/codesearch#241).
+            // The route arrived in codesearch v2.5.0, which is what the app
+            // pins — but fetch_binaries.sh falls back to building from a
+            // sibling checkout, so an older binary can still end up bundled.
+            // Reporting the raw 405 would read as a bug in Hoplon rather than
+            // a binary that predates the route.
             if case .http(status: 405, message: _) = error {
                 endpointsError = """
-                    The bundled codesearch can't remove LLM endpoints yet — its \
-                    management API serves no delete. A later codesearch release \
-                    will add it.
+                    This codesearch can't remove LLM endpoints — its management \
+                    API serves no delete. The route landed in v2.5.0; the \
+                    bundled binary is older than that.
                     """
             } else {
                 endpointsError = error.errorDescription ?? error.localizedDescription
