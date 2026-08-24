@@ -26,6 +26,19 @@ class GuardrailsProvidersManager {
     /// controls instead of the whole pane freezing.
     var busy: Set<String> = []
 
+    /// What the last discovery run did, per provider name.
+    ///
+    /// Kept so a provider that could not be reached can say so: its models are
+    /// then whatever it last reported, which looks identical to a fresh list.
+    var lastDiscovery: [String: ProviderDiscovery] = [:]
+    /// True while a run is in flight — one call covers every provider, so this
+    /// is not keyed by name like `busy`.
+    var isDiscovering = false
+    /// True when the proxy has no `POST /discovery` — no management API, or a
+    /// binary older than the route. The control hides itself rather than
+    /// offering something that answers 404.
+    var discoveryUnavailable = false
+
     // Copilot device flow.
     var copilot: CopilotLoginStatus?
     /// True when the proxy was started without `--copilot`, so the login routes
@@ -120,25 +133,43 @@ class GuardrailsProvidersManager {
         await mutate(name) {
             try await self.client.addProvider(name: name, baseURL: baseURL)
         }
-        // A provider added at runtime has not been asked what it serves — the
-        // proxy discovers models when it builds the registry — so the pane
-        // would show "No models discovered" until the next restart. Re-reading
-        // a few times picks them up once discovery has run, which is what a
-        // user expects after typing a URL that works.
-        await probeForModels(name)
+        // A provider added at runtime has never been asked what it serves, so
+        // its section reads "No models discovered" until something asks. Ask
+        // now — a user who just typed a URL that works expects to see its
+        // models, not to restart the proxy.
+        //
+        // This replaces a re-read loop that could not have worked: nothing
+        // populated the catalogue between the reads, so it always ran out its
+        // five attempts and gave up. `POST /discovery` is the call that was
+        // missing.
+        guard providers.contains(where: { $0.name == name }) else { return }
+        await rediscover()
     }
 
-    /// Re-read until `name` reports models, or we stop waiting.
+    /// Re-ask every provider what it serves, and route on the answer.
     ///
-    /// Bounded and silent: a provider that genuinely serves nothing, or is not
-    /// running yet, simply keeps its "no models discovered" note rather than
-    /// spinning forever or raising an error for a state that is not wrong.
-    private func probeForModels(_ name: String) async {
-        for _ in 0..<5 {
-            if providers.first(where: { $0.name == name })?.models.isEmpty == false { return }
-            try? await Task.sleep(for: .seconds(1))
-            if Task.isCancelled { return }
-            await load()
+    /// Replaces `providers` from the run's own response, like every mutation
+    /// here. A provider that could not be reached keeps the catalogue it had,
+    /// so this never empties the pane on a blip — `lastDiscovery` carries which
+    /// ones those were.
+    func rediscover() async {
+        await serialized { [self] in
+            isDiscovering = true
+            defer { isDiscovering = false }
+            do {
+                let result = try await client.runDiscovery()
+                providers = result.providers
+                lastDiscovery = Dictionary(
+                    result.discovery.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last }
+                )
+                discoveryUnavailable = false
+                lastError = nil
+            } catch GuardrailsClient.ClientError.notConfigured {
+                // Nothing is wrong: this proxy simply does not serve the route.
+                discoveryUnavailable = true
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
     }
 
@@ -264,6 +295,9 @@ class GuardrailsProvidersManager {
         isUnavailable = false
         copilot = nil
         copilotUnavailable = false
+        lastDiscovery.removeAll()
+        isDiscovering = false
+        discoveryUnavailable = false
         busy.removeAll()
     }
 }

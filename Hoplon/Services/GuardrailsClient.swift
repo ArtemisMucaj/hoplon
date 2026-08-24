@@ -135,6 +135,26 @@ struct GuardrailsClient {
         ).providers
     }
 
+    // MARK: - Discovery
+
+    /// Re-ask every enabled provider what it serves, and route on the answer.
+    ///
+    /// The proxy asks once at startup and routes on that snapshot, while
+    /// `/v1/models` is answered live — so a model loaded into a backend after
+    /// the proxy started is advertised and refused at the same time. This is
+    /// what closes that gap without restarting the proxy.
+    ///
+    /// Best-effort on the server: a provider that cannot be reached keeps the
+    /// catalogue it had and says so in its entry, rather than failing the call
+    /// for the providers that did answer.
+    ///
+    /// Throws `.notConfigured` on a proxy without a management API, and on one
+    /// older than the route — the caller cannot tell those apart, and does not
+    /// need to: neither has anything for this to drive.
+    func runDiscovery() async throws -> DiscoveryResponse {
+        try await send(DiscoveryResponse.self, "/discovery", method: "POST")
+    }
+
     // MARK: - Copilot
 
     /// Where the device flow stands. Throws `.notConfigured` when the proxy was
