@@ -91,30 +91,22 @@ struct MemoryClient {
         try await get("/health", type: MemoryHealth.self, timeout: 5)
     }
 
-    func stats() async throws -> MemoryStats {
-        try await get("/api/stats", type: MemoryStats.self, timeout: 10)
-    }
-
     // MARK: - Memories
 
-    /// `GET /api/memory` — memories, newest first, optionally one kind.
+    /// `GET /api/memory` — memories, newest first.
     ///
-    /// `status` defaults to `active` server-side. Pass `.superseded` /
-    /// `.retracted` to read history, or `nil` for everything — the server takes
-    /// the literal string `all` for that.
-    func list(kind: MemoryKind? = nil, status: MemoryStatus? = .active) async throws -> [Memory] {
+    /// v0.4.0 dropped both the `kind` and `status` filters: every memory is a
+    /// fact now, and there is no lifecycle to filter by. Scope is the only
+    /// narrowing left, and `project`/`namespace` are mutually exclusive.
+    func list(project: String? = nil, namespace: String? = nil) async throws -> [Memory] {
         var query: [URLQueryItem] = []
-        if let kind { query.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
-        query.append(URLQueryItem(name: "status", value: status?.rawValue ?? "all"))
+        if let namespace {
+            query.append(URLQueryItem(name: "namespace", value: namespace))
+        } else if let project {
+            query.append(URLQueryItem(name: "project", value: project))
+        }
         return try await get("/api/memory", query: query, type: MemoriesResponse.self, timeout: 30)
             .memories
-    }
-
-    /// `GET /api/conflicts` — memories that contradict each other and are both
-    /// still current. Both sides keep answering queries the whole time; this is
-    /// a review surface, not a list of hidden things.
-    func conflicts() async throws -> [MemoryConflict] {
-        try await get("/api/conflicts", type: MemoryConflictsResponse.self, timeout: 20).conflicts
     }
 
     /// `GET /api/search` — hybrid semantic + keyword search.
@@ -123,20 +115,28 @@ struct MemoryClient {
     /// makes the server prefer the namespace, so callers should pass one.
     func search(
         query: String,
-        kind: MemoryKind? = nil,
         project: String? = nil,
         namespace: String? = nil,
         limit: Int = 20
     ) async throws -> MemorySearchResponse {
         var items = [URLQueryItem(name: "q", value: query),
                      URLQueryItem(name: "limit", value: String(limit))]
-        if let kind { items.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
         if let namespace {
             items.append(URLQueryItem(name: "namespace", value: namespace))
         } else if let project {
             items.append(URLQueryItem(name: "project", value: project))
         }
         return try await get("/api/search", query: items, type: MemorySearchResponse.self, timeout: 45)
+    }
+
+    /// `GET /api/sessions` — sessions already imported into the store.
+    ///
+    /// Only the count is used (the Store panel), so the rows decode as opaque
+    /// JSON rather than a modelled type: this endpoint's row shape is not
+    /// otherwise consumed, and modelling it would be a second thing to keep in
+    /// step with the server for no gain.
+    func sessions() async throws -> [JSONValue] {
+        try await get("/api/sessions", type: MemorySessionsResponse.self, timeout: 20).sessions
     }
 
     /// `GET /api/entities` — the anchors memories reference, most-used first.
@@ -150,15 +150,15 @@ struct MemoryClient {
                       type: MemoryEntityDetail.self, timeout: 20)
     }
 
-    /// `DELETE /api/memory/{id}` — retract a memory.
+    /// `DELETE /api/memory/{id}` — delete a memory for good.
     ///
-    /// Nothing is deleted. The memory is marked as never having been true and
-    /// stays in the log for provenance; it simply stops being recalled. An
-    /// append-only store has no delete, so this is as destructive as it gets.
+    /// v0.4.0 made this a hard delete: the row is removed rather than marked
+    /// as never-true and kept in the log for provenance. Nothing behind this
+    /// can restore the memory, so callers must treat it as destructive.
     @discardableResult
-    func retract(_ id: String) async throws -> Bool {
+    func forget(_ id: String) async throws -> Bool {
         try await delete("/api/memory/\(encodeSegment(id))",
-                         type: MemoryRetractResponse.self).retracted
+                         type: MemoryDeleteResponse.self).deleted
     }
 
     /// `GET /api/memory/{id}` — a memory (with its edges) by id, or a node by

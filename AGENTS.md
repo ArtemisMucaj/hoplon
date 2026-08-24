@@ -91,7 +91,7 @@ Per-binary, if you need one in particular:
 bash scripts/download_panoply_binary.sh      # pinned release + SHA-256 verify
 bash scripts/download_guardrails_binary.sh
 bash scripts/download_codesearch_binary.sh   # pinned release (v2.5.0) + SHA-256 verify
-bash scripts/download_memory_binary.sh       # pinned release (v0.3.1) + SHA-256 verify
+bash scripts/download_memory_binary.sh       # pinned release (v0.4.1) + SHA-256 verify
 bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the fallback path)
 bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the fallback path)
 bash scripts/build_panoply_binary.sh         # builds from ../panoply
@@ -103,9 +103,27 @@ All four binaries now ship as pinned release assets, so `fetch_binaries.sh`
 downloads each and falls back to a sibling build only if the download fails.
 codesearch is pinned to v2.5.0 (the first release serving
 `DELETE /api/llm/endpoints/{name}`, which the LLM pane's remove button needs)
-and memory-rs to v0.3.1. Both download
+and memory-rs to v0.4.1 (the facts+entities model — see below). Both download
 scripts fail closed if a pin points at an asset that predates the feature the
 app drives it with.
+
+memory-rs v0.4.0 was a breaking change on both sides, so its guard is a
+two-way pin rather than a floor: the app was migrated off `/api/stats` and
+`/api/conflicts` (both removed), off the four-kind `MemoryKind` and the
+`status` filter (collapsed to `fact`, no lifecycle), and off the
+memory-to-memory edge graph (gone — entities are what relate two facts now).
+`DELETE /api/memory/{id}` is a hard delete there, not a retraction. Because
+the app can no longer drive the older API, `download_memory_binary.sh` refuses
+a build that still serves `/api/stats`, not just one that predates a feature.
+
+v0.4.1 fixes `GET /api/sessions`, which 500'd on v0.4.0 because the sessions
+controller passes `usize::MAX` as its limit and the adapter bound it as text.
+The Store panel counts sessions through that endpoint, so on v0.4.0 the count
+read 0 while the other two were correct.
+
+v0.4.0 also cannot open a v0.3.x `memory.duckdb` — it exits at startup asking
+for the store to be deleted and the sessions re-imported. Upgrading an
+existing install means moving that file aside; there is no in-place migration.
 
 The download scripts are deliberately paranoid — they refuse non-macOS assets,
 abort on a missing checksum manifest, and probe the binary for the subcommand

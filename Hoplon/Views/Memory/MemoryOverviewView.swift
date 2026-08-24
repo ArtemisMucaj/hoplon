@@ -35,6 +35,12 @@ struct MemoryOverviewView: View {
 
     // MARK: - Stats
 
+    /// The Store panel. v0.4.0 removed `GET /api/stats` along with most of what
+    /// this used to show — the edge graph, the supersede history, the node
+    /// rollup and the per-kind breakdown are not concepts in the store any
+    /// more — so the panel is the three counts that still mean something plus
+    /// the namespace count, rather than eight cards half of them permanently
+    /// blank.
     @ViewBuilder
     private var statsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -44,51 +50,10 @@ struct MemoryOverviewView: View {
                            color: .indigo, systemImage: "brain")
                 MetricCard(title: "Entities", value: metric(manager.stats?.totalEntities),
                            color: .teal, systemImage: "at")
-                MetricCard(title: "Links", value: metric(manager.stats?.totalEdges),
-                           color: .purple, systemImage: "link")
                 MetricCard(title: "Sessions", value: metric(manager.stats?.totalSessions),
                            color: .cyan, systemImage: "bubble.left.and.text.bubble.right")
-            }
-            HStack(spacing: 12) {
-                MetricCard(title: "Conflicts", value: Format.count(manager.conflictCount),
-                           color: manager.conflictCount > 0 ? .orange : .secondary,
-                           systemImage: "exclamationmark.triangle")
-                MetricCard(title: "History", value: metric(manager.stats?.historyCount),
-                           color: .secondary, systemImage: "clock.arrow.circlepath")
-                MetricCard(title: "Nodes", value: metric(manager.stats?.totalNodes),
-                           color: .orange, systemImage: "point.3.filled.connected.trianglepath.dotted")
                 MetricCard(title: "Namespaces", value: Format.count(manager.namespaces.count),
                            color: .green, systemImage: "square.stack.3d.up")
-            }
-
-            // Per-kind breakdown, when the store has anything in it.
-            if let byKind = manager.stats?.memoriesByKind, !byKind.isEmpty {
-                CardContainer {
-                    VStack(spacing: 0) {
-                        ForEach(Array(byKind.enumerated()), id: \.offset) { idx, entry in
-                            HStack(spacing: 10) {
-                                Image(systemName: MemoryKind(rawValue: entry.0)?.icon ?? "circle")
-                                    .foregroundStyle(.indigo)
-                                    .frame(width: 18)
-                                Text(MemoryKind(rawValue: entry.0)?.label ?? entry.0.capitalized)
-                                    .font(.callout)
-                                Spacer()
-                                Text(Format.count(entry.1))
-                                    .font(.callout.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 12).padding(.vertical, 8)
-                            if idx < byKind.count - 1 { Divider() }
-                        }
-                    }
-                }
-            }
-
-            if let dir = manager.stats?.dataDir {
-                Text(dir)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
             }
         }
     }

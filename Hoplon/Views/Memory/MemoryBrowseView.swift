@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Long-term memory browser, modeled on the memory-rs TUI's Memory screen: a
 /// two-pane layout — the memory virtual filesystem tree on the left, the
@@ -9,7 +10,7 @@ import SwiftUI
 struct MemoryBrowseView: View {
     @Environment(AppState.self) var state
 
-    /// All browse state (tree, query, kind, selection) lives on this app-scoped
+    /// All browse state (tree, query, selection) lives on this app-scoped
     /// manager, so it survives leaving/returning to the screen (cache) and can't
     /// be wiped by a status-poll re-render.
     private var browse: MemoryBrowseManager { state.memoryManager.browse }
@@ -30,41 +31,27 @@ struct MemoryBrowseView: View {
         .environment(browse)
         .environment(state.memoryManager)
         // Load from cache on appear (only reloads if inputs changed); load stats
-        // once. Reload when query/kind change.
+        // once. Reload when the query changes.
         .onAppear {
             browse.loadStatsIfNeeded()
-            browse.ensureLoaded(query: browse.query, kind: browse.kind)
+            browse.ensureLoaded(query: browse.query)
         }
-        .onChange(of: browse.query) { _, q in browse.ensureLoaded(query: q, kind: browse.kind) }
-        .onChange(of: browse.kind) { _, k in browse.ensureLoaded(query: browse.query, kind: k) }
+        .onChange(of: browse.query) { _, q in browse.ensureLoaded(query: q) }
     }
 
     private var searchBar: some View {
         @Bindable var browse = browse
         return HStack(spacing: 12) {
-            SearchBar(text: $browse.query, prompt: "Search memories…", accessory: {
-                accessory
-            })
+            SearchBar(text: $browse.query, prompt: "Search memories…")
             headerMetrics
         }
         .padding(12)
     }
 
-    @ViewBuilder
-    private var accessory: some View {
-        @Bindable var browse = browse
-        Picker("Kind", selection: $browse.kind) {
-            Text("All kinds").tag(MemoryKind?.none)
-            ForEach(MemoryKind.allCases) { k in Text(k.label).tag(MemoryKind?.some(k)) }
-        }
-        .labelsHidden()
-        .frame(maxWidth: 150)
-    }
-
     private var headerMetrics: some View {
         HStack(spacing: 16) {
             metric("Memories", browse.stats?.totalMemories)
-            metric("Links", browse.stats?.totalEdges)
+            metric("Entities", browse.stats?.totalEntities)
             metric("Sessions", browse.stats?.totalSessions)
         }
     }
@@ -82,12 +69,10 @@ struct MemoryBrowseView: View {
 /// from the tree structure so the detail pane logic is unchanged.
 struct MemoryTreeRow: Identifiable, Equatable {
     enum Target {
-        case group(title: String)          // a synthetic grouping row (Sessions/Memories/a kind)
+        case group(title: String)          // a synthetic grouping row (Sessions/Memories)
         case node(MemoryNode)              // a session/digest node (shows L0+L1)
         case level(node: MemoryNode, level: MemoryLevel)
         case memory(Memory)
-        /// Two memories that contradict each other and are both still current.
-        case conflict(MemoryConflict)
         case entity(MemoryEntity)
     }
     let id: String
@@ -114,7 +99,6 @@ struct MemoryTreeNode: Identifiable {
         case node(MemoryNode)
         case level(MemoryLevel)
         case memory(Memory)
-        case conflict(MemoryConflict)
         case entity(MemoryEntity)
     }
 }
@@ -205,23 +189,12 @@ private struct MemoryNodeRow: View {
                 // detail pane.
                 Text(memory.title).lineLimit(1).truncationMode(.tail)
                     .help(memory.statement ?? "")
-                // A contested result is worth flagging in the tree — otherwise
-                // you have to open every row to discover the store is holding
-                // two irreconcilable answers.
-                if memory.provenance?.isContested == true {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2).foregroundStyle(.orange)
-                }
             case .entity(let entity):
                 glyph(entity.icon, .teal, small: true)
                 Text(entity.canonicalName).lineLimit(1).truncationMode(.tail)
                 Text(entity.entityType)
                     .font(.caption2).foregroundStyle(.tertiary)
                 if entity.memoryCount > 0 { CountPill(entity.memoryCount) }
-            case .conflict(let conflict):
-                glyph("exclamationmark.triangle", .orange, small: true)
-                Text(conflict.a.title).lineLimit(1).truncationMode(.tail)
-                    .help((conflict.a.statement ?? "") + "\n  vs\n" + (conflict.b.statement ?? ""))
             }
             Spacer()
             if let score = node.score {
@@ -297,8 +270,6 @@ struct MemoryDetailPane: View {
             LevelDetail(node: node, level: level).environment(manager)
         case .memory(let memory):
             MemoryDetail(memory: memory).environment(manager)
-        case .conflict(let conflict):
-            conflictDetail(conflict)
         case .entity(let entity):
             EntityDetail(entity: entity).environment(manager)
         }
@@ -325,36 +296,6 @@ struct MemoryDetailPane: View {
            !(node.level2Content ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
             Text("Select “L2 · Detail” to read the full content.")
                 .font(.caption).foregroundStyle(.tertiary)
-        }
-    }
-
-    @ViewBuilder
-    private func conflictDetail(_ conflict: MemoryConflict) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                Text("Unresolved disagreement").font(.title3.weight(.semibold))
-                Spacer(minLength: 0)
-            }
-            Text("Both of these are still current and both still answer queries. "
-                 + "Nothing is hidden while they disagree — the consolidation pass "
-                 + "reconciles them into a new memory that supersedes both.")
-                .font(.callout).foregroundStyle(.secondary)
-            ForEach([conflict.a, conflict.b]) { side in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(side.statement ?? side.id).font(.callout.weight(.medium))
-                    HStack(spacing: 6) {
-                        Badge(text: side.sourceKind.label, color: .secondary)
-                        if let c = side.confidence {
-                            Text(String(format: "confidence %.2f", c))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
-            }
         }
     }
 
@@ -437,19 +378,16 @@ private struct LevelDetail: View {
     }
 }
 
-/// The detail pane for one memory: the statement, its metadata, the triple it
-/// was built from, and its typed edges.
+/// The detail pane for one memory: the statement, its metadata, and the
+/// entities it mentions.
 ///
-/// Edges are fetched lazily on selection through the same `.task(id:)` +
-/// `resolveIfNeeded()` shape `LevelDetail` uses, rather than a second pattern:
-/// a list response carries no edges, so the neighbourhood has to come from
-/// `GET /api/memory/{id}` when a row is actually opened.
+/// A list row already carries the whole memory, but it is re-fetched by id on
+/// selection — through the same `.task(id:)` shape `LevelDetail` uses — so the
+/// pane shows the stored row rather than a possibly stale list entry.
 private struct MemoryDetail: View {
     let memory: Memory
     @Environment(MemoryManager.self) private var manager
 
-    @State private var edges: [MemoryEdgeDTO] = []
-    @State private var isLoadingEdges = false
     @State private var resolved: Memory?
     @State private var isForgetting = false
 
@@ -459,17 +397,13 @@ private struct MemoryDetail: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 if let kind = effective.kind { Badge(text: kind, color: .indigo) }
-                statusBadge
                 Spacer(minLength: 0)
                 CopyButton(text: { effective.statement ?? "" }, help: "Copy statement")
-                if effective.status == .active {
-                    Button("Forget") { Task { await forget() } }
-                        .controlSize(.small)
-                        .disabled(isForgetting)
-                        .help("Mark this as never having been true. It stays in the "
-                              + "log for provenance and stops being recalled — nothing "
-                              + "is deleted.")
-                }
+                Button("Forget") { Task { await forget() } }
+                    .controlSize(.small)
+                    .disabled(isForgetting)
+                    .help("Delete this memory. The store no longer keeps a "
+                          + "retraction behind it, so this cannot be undone.")
             }
 
             Text(effective.statement ?? "(no statement)")
@@ -479,14 +413,9 @@ private struct MemoryDetail: View {
 
             metadataRow
 
-            edgesSection
+            entitiesSection
         }
-        .task(id: memory.id) { await loadEdges() }
-    }
-
-    private var statusBadge: some View {
-        Badge(text: effective.status.label,
-              color: effective.status == .active ? .green : .secondary)
+        .task(id: memory.id) { await loadMemory() }
     }
 
     @ViewBuilder
@@ -501,9 +430,6 @@ private struct MemoryDetail: View {
             } else {
                 Label("global", systemImage: "globe")
             }
-            if effective.derived {
-                Label("consolidated", systemImage: "sparkles")
-            }
             Spacer(minLength: 0)
         }
         .font(.caption)
@@ -511,83 +437,64 @@ private struct MemoryDetail: View {
         .lineLimit(1)
     }
 
+    /// The entities this fact mentions. With the memory-to-memory edges gone,
+    /// these are what relate one memory to another: two facts about the same
+    /// entity are the store's only remaining notion of "related".
     @ViewBuilder
-    private var edgesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(isLoadingEdges ? "Links" : "Links (\(edges.count))")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.cyan)
-                if isLoadingEdges { ProgressView().controlSize(.small) }
-                Spacer(minLength: 0)
-            }
-            if !isLoadingEdges && edges.isEmpty {
-                Text("No links — nothing supersedes, refines or contradicts this.")
-                    .font(.callout).foregroundStyle(.tertiary)
-            }
-            ForEach(edges) { edge in
-                edgeRow(edge)
+    private var entitiesSection: some View {
+        let names = effective.entities
+        if !names.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Entities (\(names.count))")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.teal)
+                // A ViewThatFits-free wrap: entity counts are small (a fact
+                // mentions a handful at most), so a lazy grid that reflows with
+                // the pane is simpler than measuring rows by hand.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 6)],
+                          alignment: .leading, spacing: 6) {
+                    ForEach(names, id: \.self) { name in
+                        Badge(text: name, color: .teal)
+                    }
+                }
             }
         }
     }
-
-    @ViewBuilder
-    private func edgeRow(_ edge: MemoryEdgeDTO) -> some View {
-        let outgoing = edge.outgoing(from: effective.id)
-        let type = edge.type
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: type?.icon ?? "link")
-                .font(.caption)
-                .foregroundStyle(type == .contradicts ? .orange : .secondary)
-                .frame(width: 16)
-            // Direction spelled out: "supersedes X" and "superseded by X" are
-            // opposite facts about the memory on screen.
-            Text(type?.phrase(outgoing: outgoing) ?? edge.edgeType)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(type == .contradicts ? .orange : .secondary)
-                .frame(width: 110, alignment: .leading)
-            Text(statement(for: edge.other(than: effective.id)))
-                .font(.callout)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// Resolved statements for the far side of each edge, so a link reads as a
-    /// sentence rather than an opaque id.
-    @State private var neighbours: [String: String] = [:]
-    private func statement(for id: String) -> String { neighbours[id] ?? id }
 
     private func forget() async {
+        // Confirmed, unlike the LLM-endpoint removal this app deliberately does
+        // not confirm: that one rewrites a config entry the user can retype,
+        // while v0.4.0 made this a hard delete with nothing behind it. Before
+        // v0.4.0 the same button wrote a retraction and the row survived, so
+        // the click that used to be recoverable now is not — the tooltip alone
+        // is not where that belongs.
+        let alert = NSAlert()
+        alert.messageText = "Forget this memory?"
+        alert.informativeText = (memory.statement.map { "“\($0)”\n\n" } ?? "")
+            + "It is deleted from the store for good. Nothing retains it and "
+            + "recall cannot bring it back."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Forget")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
         isForgetting = true
         defer { isForgetting = false }
-        guard (try? await manager.makeClient().retract(memory.id)) == true else { return }
+        guard (try? await manager.makeClient().forget(memory.id)) == true else { return }
+        // The store just lost a row; recount rather than let the Store panel
+        // show the old number until the next slow tick.
+        manager.invalidateStats()
         // Reload through the browse manager so the tree drops the row too —
         // a detail pane that updates while the tree still lists the memory is
         // worse than not updating at all.
-        manager.browse.refresh(query: manager.browse.query, kind: manager.browse.kind)
+        manager.browse.refresh(query: manager.browse.query)
     }
 
-    private func loadEdges() async {
-        isLoadingEdges = true
-        defer { isLoadingEdges = false }
+    private func loadMemory() async {
         let client = manager.makeClient()
-        guard let shown = try? await client.show(memory.id), shown.type == "memory" else {
-            edges = []
-            return
-        }
-        if let m = shown.memory { resolved = m }
-        let found = shown.edges ?? []
-        edges = found
-        // One fetch per neighbour. Bounded by a memory's edge count, which is
-        // small; the batched path exists server-side for recall, not for a
-        // single opened row.
-        var resolvedNeighbours: [String: String] = [:]
-        for id in Set(found.map { $0.other(than: memory.id) }) {
-            if let other = try? await client.show(id), let m = other.memory {
-                resolvedNeighbours[id] = m.statement ?? id
-            }
-        }
-        neighbours = resolvedNeighbours
+        guard let shown = try? await client.show(memory.id), shown.type == "memory",
+              let m = shown.memory else { return }
+        resolved = m
     }
 }
 

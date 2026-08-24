@@ -6,8 +6,8 @@ import Observation
 /// Unlike the other two services, `memory-rs serve` needs only ONE port: it
 /// serves the REST management API and mounts the MCP streamable-HTTP endpoint
 /// at `/mcp` on the same listener. Mirrors `GuardrailsManager` otherwise —
-/// process-group supervision plus periodic polling of `/health`, `/api/stats`
-/// and `/api/namespaces`.
+/// process-group supervision plus periodic polling of `/health`,
+/// `/api/namespaces` and the counts behind the Store panel.
 ///
 /// The per-action API surface used by the views lives in `MemoryClient`,
 /// constructed on demand from `apiBase`. This type stays focused on lifecycle
@@ -22,16 +22,18 @@ class MemoryManager {
     /// Whether the server answered the most recent `/health` probe.
     var isReachable = false
     var health: MemoryHealth?
+    /// Store counts for the Overview. v0.4.0 removed `GET /api/stats`, so this
+    /// is assembled here from the list endpoints rather than decoded from one
+    /// response — see `refreshStats()`.
     var stats: MemoryStats?
     var namespaces: [MemoryNamespace] = []
-    /// Unresolved disagreements — pairs of memories that contradict each other
-    /// and are both still current. Polled with the stats so the Overview can
-    /// show it without every view fetching its own copy.
-    ///
-    /// Not a health signal: both sides keep answering queries the whole time,
-    /// so a non-zero count means the store is being honest about holding two
-    /// answers, not that something is broken.
-    var conflictCount: Int = 0
+
+    /// Where memory-rs keeps its store. The app never passes `--data-dir`, so
+    /// this mirrors the server's own default ($HOME/.memory-rs). Surfaced in
+    /// Settings so "where did my memories go" is answerable in the UI.
+    static var defaultDataDir: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".memory-rs")
+    }
 
     private var process: Process?
     private var processSource: DispatchSourceProcess?
@@ -59,6 +61,9 @@ class MemoryManager {
 
     /// Poll cadence, matching the other managers.
     private let pollInterval: Duration = .seconds(5)
+    /// How often the Store counts are recomputed — see `refreshStats(client:)`.
+    private let statsInterval: Duration = .seconds(60)
+    @ObservationIgnored private var lastStatsRefresh: ContinuousClock.Instant?
     /// Extra grace on the first probes: `serve` opens DuckDB and may initialise
     /// an embedding model before `/health` answers.
     private let firstProbeRetries = 6
@@ -72,12 +77,17 @@ class MemoryManager {
         self.sessionImport = SessionImportManager(clientProvider: { [weak self] in
             MemoryClient(base: self?.apiBase ?? "http://127.0.0.1:\(port)")
         })
-        // An import is the only in-app write to the store, so it is also the
-        // only moment the cached browse tree and the stats can go stale.
+        // An import writes to the store, so it is one of the moments the cached
+        // browse tree and the counts go stale. Forced, because the counts are
+        // otherwise on a slow clock and an import is exactly when a user looks
+        // at them.
         self.sessionImport.onImportCompleted = { [weak self] in
             guard let self else { return }
             self.browse.invalidate()
-            Task { await self.refreshOnce() }
+            Task {
+                await self.refreshOnce()
+                await self.refreshStats(client: self.makeClient(), force: true)
+            }
         }
     }
 
@@ -88,6 +98,16 @@ class MemoryManager {
 
     /// A client for per-user-action calls (browse, search, import, namespaces…).
     func makeClient() -> MemoryClient { MemoryClient(base: apiBase) }
+
+    /// Recount the Store panel now, skipping the usual interval.
+    ///
+    /// For callers that just changed what the counts count — forgetting a
+    /// memory is the one in the app today. Without this the panel would keep
+    /// showing the old number for up to `statsInterval` after the row vanished
+    /// from the tree, which reads as a bug in the delete.
+    func invalidateStats() {
+        Task { await refreshStats(client: makeClient(), force: true) }
+    }
 
     /// App-scoped memory-browser state (the built tree + stats), cached so
     /// leaving and returning to the Browse screen doesn't reload, and so a
@@ -180,12 +200,11 @@ class MemoryManager {
         health = nil
         stats = nil
         namespaces = []
-        conflictCount = 0
     }
 
     // MARK: - Polling
 
-    /// Fetch `/health`, `/api/stats` and `/api/namespaces` once.
+    /// Fetch `/health`, `/api/namespaces` and the store counts once.
     func refresh() {
         Task { await refreshOnce() }
     }
@@ -199,14 +218,45 @@ class MemoryManager {
         } else {
             if isReachable { isReachable = false }
         }
-        if let s = try? await client.stats() { stats = s }
         if let ns = try? await client.namespaces() { namespaces = ns }
-        // `try?` on purpose: a binary predating /api/conflicts must degrade to
-        // "no conflicts shown", not break the whole refresh.
-        if let c = try? await client.conflicts() { conflictCount = c.count }
+        await refreshStats(client: client)
         // Once reachable, wire up a local LLM if the user hasn't configured one,
         // so extraction and dreaming work out of the box.
         if isReachable { await autodetectLlmEndpointIfNeeded(client: client) }
+    }
+
+    /// Count what the Store panel shows.
+    ///
+    /// There is no rollup endpoint any more, so this counts the three list
+    /// endpoints. Each is `try?` independently: one slow or failing list
+    /// should leave the other two counts standing rather than blank the whole
+    /// panel. They are fetched concurrently because a large store makes
+    /// `/api/memory` the slowest of the three by far, and nothing here depends
+    /// on anything else here.
+    ///
+    /// Deliberately on a slower clock than the poll loop. `/api/stats` used to
+    /// return counts alone; counting means downloading every memory and every
+    /// entity to read `.count` off them, which at `pollInterval` would re-fetch
+    /// the whole store every 5 seconds and get worse as the store grows. The
+    /// numbers are a rollup nobody watches tick, so a minute is soon enough —
+    /// and anything that *changes* them (an import, a delete) refreshes them
+    /// directly via `invalidateStats()`.
+    private func refreshStats(client: MemoryClient, force: Bool = false) async {
+        if !force, let last = lastStatsRefresh, stats != nil,
+           ContinuousClock.now - last < statsInterval { return }
+        lastStatsRefresh = .now
+        async let memories = try? await client.list()
+        async let entities = try? await client.entities()
+        async let sessions = try? await client.sessions()
+        let (m, e, se) = await (memories, entities, sessions)
+        // Leave the previous numbers up if every list failed — a transient
+        // blip should not flash the panel to zero.
+        if m == nil && e == nil && se == nil { return }
+        stats = MemoryStats(
+            totalMemories: m?.count ?? stats?.totalMemories ?? 0,
+            totalEntities: e?.count ?? stats?.totalEntities ?? 0,
+            totalSessions: se?.count ?? stats?.totalSessions ?? 0
+        )
     }
 
     /// If memory has no LLM endpoint configured and a local OpenAI-compatible
