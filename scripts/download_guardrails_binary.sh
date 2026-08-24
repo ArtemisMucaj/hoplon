@@ -29,10 +29,14 @@ set -euo pipefail
 # `write_refused` outcome, which /stats already reports — so this pin is a
 # behaviour upgrade for anything proxying through Hoplon, not an API change.
 #
+# v0.14.1 routes every request that names a model and hides the per-provider
+# duplicates from /v1/models. Nothing the app drives moved; the providers pane
+# just stops showing the same model once per provider.
+#
 # The version is pinned so the bundled binary is reproducible. Override with:
 #   GUARDRAILS_VERSION=latest bash scripts/download_guardrails_binary.sh
 
-GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.14.0}"
+GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.14.1}"
 GUARDRAILS_ASSET="${GUARDRAILS_ASSET:-guardrail-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"

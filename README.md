@@ -49,7 +49,7 @@ xcodebuild -project Hoplon.xcodeproj -scheme Hoplon -configuration Debug build
 ```
 
 Downloads are pinned to a release and SHA-256 verified against its manifest:
-panoply v0.2.0, guardrail v0.14.0, memory-rs v0.3.1, codesearch v2.5.0. A
+panoply v0.2.0, guardrail v0.14.1, memory-rs v0.4.0, codesearch v2.5.0. A
 sibling checkout is only the fallback if a download fails; clone the repo beside
 this one, or set `PANOPLY_REPO` / `GUARDRAILS_REPO` / `MEMORY_REPO` /
 `CODESEARCH_REPO`.

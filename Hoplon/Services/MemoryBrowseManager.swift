@@ -21,17 +21,15 @@ final class MemoryBrowseManager {
     var isLoading = false
     var error: String?
 
-    /// UI state kept here too so the search text, kind filter, and selection all
+    /// UI state kept here too so the search text and selection all
     /// survive navigating away and back (not just the loaded tree).
     var query = ""
-    var kind: MemoryKind?
     /// The selected row's id (resolved back to a row via `selectedRow`).
     var selectedRowID: String?
 
-    /// The query + kind the current `nodes` were built for, so the view can skip
+    /// The query the current `nodes` were built for, so the view can skip
     /// a redundant reload when nothing changed (the cache).
     private(set) var loadedQuery = ""
-    private(set) var loadedKind: MemoryKind?
     /// Whether a browse (non-search) tree has ever been built, so a first visit
     /// loads but return visits reuse the cache.
     private(set) var hasLoaded = false
@@ -43,26 +41,42 @@ final class MemoryBrowseManager {
         self.clientProvider = clientProvider
     }
 
-    /// Ensure the tree is loaded for `(query, kind)`. Reuses the cache when the
+    /// Ensure the tree is loaded for `query`. Reuses the cache when the
     /// inputs are unchanged; otherwise (re)loads. Called on appear and on
-    /// query/kind changes.
-    func ensureLoaded(query: String, kind: MemoryKind?, force: Bool = false) {
+    /// query changes.
+    func ensureLoaded(query: String, force: Bool = false) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !force, hasLoaded, trimmed == loadedQuery, kind == loadedKind, error == nil {
+        if !force, hasLoaded, trimmed == loadedQuery, error == nil {
             return
         }
-        reload(query: trimmed, kind: kind)
+        reload(query: trimmed)
     }
 
     /// Force a fresh load for the current inputs (the Refresh button).
-    func refresh(query: String, kind: MemoryKind?) {
-        reload(query: query.trimmingCharacters(in: .whitespacesAndNewlines), kind: kind)
+    func refresh(query: String) {
+        reload(query: query.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Load memory stats once (for the header), cached.
+    /// Load the header counts once, cached.
+    ///
+    /// There is no `/api/stats` any more, so these are counted from the list
+    /// endpoints — the same three counts `MemoryManager.refreshStats()` keeps
+    /// for the Overview. Counted again here rather than read off the manager
+    /// because the browser can be opened before the first poll lands, and a
+    /// header that is blank until an unrelated timer fires reads as broken.
     func loadStatsIfNeeded() {
         guard stats == nil else { return }
-        Task { stats = try? await clientProvider().stats() }
+        let client = clientProvider()
+        Task {
+            async let memories = try? await client.list()
+            async let entities = try? await client.entities()
+            async let sessions = try? await client.sessions()
+            let (m, e, se) = await (memories, entities, sessions)
+            if m == nil && e == nil && se == nil { return }
+            stats = MemoryStats(totalMemories: m?.count ?? 0,
+                                totalEntities: e?.count ?? 0,
+                                totalSessions: se?.count ?? 0)
+        }
     }
 
     /// Mark the cache stale *without* clearing what is on screen.
@@ -75,7 +89,7 @@ final class MemoryBrowseManager {
     func invalidate() {
         hasLoaded = false
         if !nodes.isEmpty || isLoading {
-            reload(query: loadedQuery, kind: loadedKind)
+            reload(query: loadedQuery)
         }
     }
 
@@ -83,7 +97,7 @@ final class MemoryBrowseManager {
     func reset() {
         loadTask?.cancel()
         nodes = []; stats = nil; error = nil
-        hasLoaded = false; loadedQuery = ""; loadedKind = nil
+        hasLoaded = false; loadedQuery = ""
         selectedRowID = nil
     }
 
@@ -102,16 +116,15 @@ final class MemoryBrowseManager {
 
     // MARK: - Loading
 
-    private func reload(query: String, kind: MemoryKind?) {
+    private func reload(query: String) {
         loadTask?.cancel()
         loadedQuery = query
-        loadedKind = kind
         let client = clientProvider()
         loadTask = Task {
             if query.isEmpty {
-                await loadBrowse(client: client, kind: kind)
+                await loadBrowse(client: client)
             } else {
-                await loadSearch(client: client, query: query, kind: kind)
+                await loadSearch(client: client, query: query)
             }
         }
     }
@@ -119,30 +132,28 @@ final class MemoryBrowseManager {
     /// Build the browse tree:
     /// - **Memories** — the whole-memory digest: selecting the group itself
     ///   shows its L0 Abstract + L1 Overview in the detail pane, and its
-    ///   children are the per-kind subcategories (Facts, Skills, …).
+    ///   children are the memories themselves. There is no per-kind layer any
+    ///   more: v0.4.0 collapsed the taxonomy to `fact`, so a subcategory level
+    ///   would be one folder called "Facts" holding everything.
     /// - **Projects** — per-project digest nodes, when any exist.
     /// - **Resources** — ingested resource nodes, when any exist.
     /// - **Sessions** — each session node, its L0/L1/L2 nested beneath it.
-    private func loadBrowse(client: MemoryClient, kind: MemoryKind?) async {
+    private func loadBrowse(client: MemoryClient) async {
         isLoading = true; error = nil
         // Only clear the spinner if this task still owns the load — a superseded
-        // reload (fast kind/query change) must not flip `isLoading` off while the
+        // reload (fast query change) must not flip `isLoading` off while the
         // newer task is running, which flickered the spinner.
         defer { if !Task.isCancelled { isLoading = false } }
         do {
             async let treeNodes = client.tree(uri: nil)
-            async let memoryList = client.list(kind: kind)
+            async let memoryList = client.list()
             async let projectNodes = client.tree(uri: "memory://projects")
             async let resourceNodes = client.tree(uri: "memory://resources")
-            // Conflicts are advisory: a server too old to serve the route must
-            // not take the whole tree down with it.
-            async let conflictList = try? client.conflicts()
-            // Advisory like conflicts: a binary predating /api/entities must not
-            // take the whole tree down.
+            // Advisory: a failing /api/entities must not take the whole tree
+            // down with it.
             async let entityList = try? client.entities()
             let (rawNodes, memories, projects, resources) =
                 try await (treeNodes, memoryList, projectNodes, resourceNodes)
-            let conflicts = await conflictList ?? []
             let entities = await entityList ?? []
             if Task.isCancelled { return }
 
@@ -153,31 +164,8 @@ final class MemoryBrowseManager {
             var groups: [MemoryTreeNode] = []
 
             // Memories: the group row IS the digest node, so selecting it shows
-            // L0/L1 in the detail pane. Children are the per-kind subcategories.
-            var memoryChildren: [MemoryTreeNode] = []
-            let byKind = Dictionary(grouping: memories) { MemoryKind(rawValue: $0.kind ?? "") }
-            for kindCase in MemoryKind.allCases {
-                guard let kindMemories = byKind[kindCase], !kindMemories.isEmpty else { continue }
-                memoryChildren.append(MemoryTreeNode(
-                    id: "kind:\(kindCase.rawValue)",
-                    display: .group(title: kindCase.label, icon: kindCase.icon, tint: .indigo, count: kindMemories.count),
-                    row: MemoryTreeRow(id: "kind:\(kindCase.rawValue)", target: .group(title: kindCase.label), score: nil),
-                    children: kindMemories.map { Self.memoryNode($0) }
-                ))
-            }
-            // The `nil` bucket — a kind this build does not know. Grouping by an
-            // optional key silently discarded these, so a memory whose kind the
-            // server added later simply vanished from the browser with no hint
-            // that anything was missing. Show it instead.
-            if let unknown = byKind[nil], !unknown.isEmpty {
-                memoryChildren.append(MemoryTreeNode(
-                    id: "kind:other",
-                    display: .group(title: "Other", icon: "questionmark.folder",
-                                    tint: .secondary, count: unknown.count),
-                    row: MemoryTreeRow(id: "kind:other", target: .group(title: "Other"), score: nil),
-                    children: unknown.map { Self.memoryNode($0) }
-                ))
-            }
+            // L0/L1 in the detail pane. Children are the memories directly.
+            let memoryChildren: [MemoryTreeNode] = memories.map { Self.memoryNode($0) }
             if digest != nil || !memoryChildren.isEmpty {
                 let memoryRow: MemoryTreeRow = digest.map {
                     MemoryTreeRow(id: "group:memories", target: .node($0), score: nil)
@@ -190,23 +178,9 @@ final class MemoryBrowseManager {
                 ))
             }
 
-            // Conflicts — pairs that contradict each other, both still current.
-            // Placed right under Memories because it is the one group that wants
-            // a decision; without it the disagreements are invisible, since both
-            // sides also appear as ordinary memories above.
-            if !conflicts.isEmpty {
-                groups.append(MemoryTreeNode(
-                    id: "group:conflicts",
-                    display: .group(title: "Conflicts", icon: "exclamationmark.triangle",
-                                    tint: .orange, count: conflicts.count),
-                    row: MemoryTreeRow(id: "group:conflicts", target: .group(title: "Conflicts"), score: nil),
-                    children: conflicts.map(Self.conflictNode)
-                ))
-            }
-
-            // Entities — the anchors memories hang off. Placed after Conflicts
-            // because it is a structural view rather than something to act on,
-            // but before Projects because it is part of the memory graph.
+            // Entities — the anchors memories hang off, and now the only thing
+            // relating one memory to another. Placed before Projects because it
+            // is part of the memory model rather than a scope over it.
             if !entities.isEmpty {
                 groups.append(MemoryTreeNode(
                     id: "group:entities",
@@ -258,14 +232,14 @@ final class MemoryBrowseManager {
         }
     }
 
-    private func loadSearch(client: MemoryClient, query: String, kind: MemoryKind?) async {
+    private func loadSearch(client: MemoryClient, query: String) async {
         // Small debounce so live typing doesn't fire a request per keystroke.
         try? await Task.sleep(for: .milliseconds(300))
         if Task.isCancelled { return }
         isLoading = true; error = nil
         defer { if !Task.isCancelled { isLoading = false } }
         do {
-            let response = try await client.search(query: query, kind: kind)
+            let response = try await client.search(query: query)
             if Task.isCancelled { return }
             nodes = response.results.map { Self.memoryNode($0, score: $0.score) }
             hasLoaded = true
@@ -291,12 +265,18 @@ final class MemoryBrowseManager {
         }
     }
 
+    /// A node with its L0/L1/L2 rows beneath it.
+    ///
+    /// Only resources still carry all three levels in v0.4.0 — a session node
+    /// is now just a `uri`/`kind`/`abstract` triple, so giving it level rows
+    /// would hang three permanently empty children off every session.
     private static func nodeTree(_ node: MemoryNode) -> MemoryTreeNode {
-        MemoryTreeNode(
+        let levels = node.kind == "resource" ? levelChildren(for: node) : []
+        return MemoryTreeNode(
             id: node.id,
             display: .node(node),
             row: MemoryTreeRow(id: node.id, target: .node(node), score: nil),
-            children: levelChildren(for: node)
+            children: levels.isEmpty ? nil : levels
         )
     }
 
@@ -326,15 +306,6 @@ final class MemoryBrowseManager {
             id: "entity:\(entity.id)",
             display: .entity(entity),
             row: MemoryTreeRow(id: "entity:\(entity.id)", target: .entity(entity), score: nil),
-            children: nil
-        )
-    }
-
-    private static func conflictNode(_ conflict: MemoryConflict) -> MemoryTreeNode {
-        MemoryTreeNode(
-            id: "conflict:\(conflict.id)",
-            display: .conflict(conflict),
-            row: MemoryTreeRow(id: "conflict:\(conflict.id)", target: .conflict(conflict), score: nil),
             children: nil
         )
     }

@@ -6,8 +6,8 @@ import Observation
 /// Unlike the other two services, `memory-rs serve` needs only ONE port: it
 /// serves the REST management API and mounts the MCP streamable-HTTP endpoint
 /// at `/mcp` on the same listener. Mirrors `GuardrailsManager` otherwise —
-/// process-group supervision plus periodic polling of `/health`, `/api/stats`
-/// and `/api/namespaces`.
+/// process-group supervision plus periodic polling of `/health`,
+/// `/api/namespaces` and the counts behind the Store panel.
 ///
 /// The per-action API surface used by the views lives in `MemoryClient`,
 /// constructed on demand from `apiBase`. This type stays focused on lifecycle
@@ -22,16 +22,18 @@ class MemoryManager {
     /// Whether the server answered the most recent `/health` probe.
     var isReachable = false
     var health: MemoryHealth?
+    /// Store counts for the Overview. v0.4.0 removed `GET /api/stats`, so this
+    /// is assembled here from the list endpoints rather than decoded from one
+    /// response — see `refreshStats()`.
     var stats: MemoryStats?
     var namespaces: [MemoryNamespace] = []
-    /// Unresolved disagreements — pairs of memories that contradict each other
-    /// and are both still current. Polled with the stats so the Overview can
-    /// show it without every view fetching its own copy.
-    ///
-    /// Not a health signal: both sides keep answering queries the whole time,
-    /// so a non-zero count means the store is being honest about holding two
-    /// answers, not that something is broken.
-    var conflictCount: Int = 0
+
+    /// Where memory-rs keeps its store. The app never passes `--data-dir`, so
+    /// this mirrors the server's own default ($HOME/.memory-rs). Surfaced in
+    /// Settings so "where did my memories go" is answerable in the UI.
+    static var defaultDataDir: String {
+        (NSHomeDirectory() as NSString).appendingPathComponent(".memory-rs")
+    }
 
     private var process: Process?
     private var processSource: DispatchSourceProcess?
@@ -180,12 +182,11 @@ class MemoryManager {
         health = nil
         stats = nil
         namespaces = []
-        conflictCount = 0
     }
 
     // MARK: - Polling
 
-    /// Fetch `/health`, `/api/stats` and `/api/namespaces` once.
+    /// Fetch `/health`, `/api/namespaces` and the store counts once.
     func refresh() {
         Task { await refreshOnce() }
     }
@@ -199,14 +200,34 @@ class MemoryManager {
         } else {
             if isReachable { isReachable = false }
         }
-        if let s = try? await client.stats() { stats = s }
         if let ns = try? await client.namespaces() { namespaces = ns }
-        // `try?` on purpose: a binary predating /api/conflicts must degrade to
-        // "no conflicts shown", not break the whole refresh.
-        if let c = try? await client.conflicts() { conflictCount = c.count }
+        await refreshStats(client: client)
         // Once reachable, wire up a local LLM if the user hasn't configured one,
         // so extraction and dreaming work out of the box.
         if isReachable { await autodetectLlmEndpointIfNeeded(client: client) }
+    }
+
+    /// Count what the Store panel shows.
+    ///
+    /// There is no rollup endpoint any more, so this counts the three list
+    /// endpoints. Each is `try?` independently: one slow or failing list
+    /// should leave the other two counts standing rather than blank the whole
+    /// panel. They are fetched concurrently because a large store makes
+    /// `/api/memory` the slowest of the three by far, and nothing here depends
+    /// on anything else here.
+    private func refreshStats(client: MemoryClient) async {
+        async let memories = try? await client.list()
+        async let entities = try? await client.entities()
+        async let sessions = try? await client.sessions()
+        let (m, e, se) = await (memories, entities, sessions)
+        // Leave the previous numbers up if every list failed — a transient
+        // blip should not flash the panel to zero.
+        if m == nil && e == nil && se == nil { return }
+        stats = MemoryStats(
+            totalMemories: m?.count ?? stats?.totalMemories ?? 0,
+            totalEntities: e?.count ?? stats?.totalEntities ?? 0,
+            totalSessions: se?.count ?? stats?.totalSessions ?? 0
+        )
     }
 
     /// If memory has no LLM endpoint configured and a local OpenAI-compatible

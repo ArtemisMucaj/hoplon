@@ -219,21 +219,12 @@ struct NamespaceDetailView: View {
                 if let project = memory.project {
                     Text(project).font(.caption2).foregroundStyle(.tertiary)
                 }
-                // Recall carries a compact provenance; surfacing it here is what
-                // stops a contested answer looking like a settled one.
-                if let p = memory.provenance {
-                    if p.supersedesCount > 0 {
-                        Text("replaced \(p.supersedesCount)\(p.chainTruncated ? "+" : "")")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    if p.corroborations > 0 {
-                        Text("corroborated \(p.corroborations)×")
-                            .font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    if p.isContested {
-                        Label("contested", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption2).foregroundStyle(.orange)
-                    }
+                // v0.4.0 dropped the provenance block that used to qualify a
+                // recall hit (replaced/corroborated/contested). The entities are
+                // what is left to say what the hit is about, so they take the
+                // slot rather than leaving the row bare.
+                ForEach(memory.entities.prefix(3), id: \.self) { name in
+                    Text(name).font(.caption2).foregroundStyle(.teal)
                 }
             }
         }

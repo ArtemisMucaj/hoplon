@@ -444,8 +444,13 @@ private struct MemoryProcessPane: View {
                 Section("Storage") {
                     // memory-rs owns its data directory; surface it read-only so
                     // "where did my memories go" has an answer in the UI.
+                    //
+                    // Resolved locally rather than read back from the server:
+                    // v0.4.0 dropped /api/stats, which is where the path used to
+                    // come from. The app never passes --data-dir, so memory-rs
+                    // uses its default of $HOME/.memory-rs.
                     LabeledContent("Data directory") {
-                        Text(state.memoryManager.stats?.dataDir ?? "~/.memory-rs")
+                        Text(MemoryManager.defaultDataDir)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
