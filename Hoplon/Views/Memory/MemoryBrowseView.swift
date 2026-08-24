@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Long-term memory browser, modeled on the memory-rs TUI's Memory screen: a
 /// two-pane layout — the memory virtual filesystem tree on the left, the
@@ -460,9 +461,29 @@ private struct MemoryDetail: View {
     }
 
     private func forget() async {
+        // Confirmed, unlike the LLM-endpoint removal this app deliberately does
+        // not confirm: that one rewrites a config entry the user can retype,
+        // while v0.4.0 made this a hard delete with nothing behind it. Before
+        // v0.4.0 the same button wrote a retraction and the row survived, so
+        // the click that used to be recoverable now is not — the tooltip alone
+        // is not where that belongs.
+        let alert = NSAlert()
+        alert.messageText = "Forget this memory?"
+        alert.informativeText = (memory.statement.map { "“\($0)”\n\n" } ?? "")
+            + "It is deleted from the store for good. Nothing retains it and "
+            + "recall cannot bring it back."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Forget")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
         isForgetting = true
         defer { isForgetting = false }
         guard (try? await manager.makeClient().forget(memory.id)) == true else { return }
+        // The store just lost a row; recount rather than let the Store panel
+        // show the old number until the next slow tick.
+        manager.invalidateStats()
         // Reload through the browse manager so the tree drops the row too —
         // a detail pane that updates while the tree still lists the memory is
         // worse than not updating at all.

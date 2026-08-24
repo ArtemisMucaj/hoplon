@@ -61,6 +61,9 @@ class MemoryManager {
 
     /// Poll cadence, matching the other managers.
     private let pollInterval: Duration = .seconds(5)
+    /// How often the Store counts are recomputed — see `refreshStats(client:)`.
+    private let statsInterval: Duration = .seconds(60)
+    @ObservationIgnored private var lastStatsRefresh: ContinuousClock.Instant?
     /// Extra grace on the first probes: `serve` opens DuckDB and may initialise
     /// an embedding model before `/health` answers.
     private let firstProbeRetries = 6
@@ -74,12 +77,17 @@ class MemoryManager {
         self.sessionImport = SessionImportManager(clientProvider: { [weak self] in
             MemoryClient(base: self?.apiBase ?? "http://127.0.0.1:\(port)")
         })
-        // An import is the only in-app write to the store, so it is also the
-        // only moment the cached browse tree and the stats can go stale.
+        // An import writes to the store, so it is one of the moments the cached
+        // browse tree and the counts go stale. Forced, because the counts are
+        // otherwise on a slow clock and an import is exactly when a user looks
+        // at them.
         self.sessionImport.onImportCompleted = { [weak self] in
             guard let self else { return }
             self.browse.invalidate()
-            Task { await self.refreshOnce() }
+            Task {
+                await self.refreshOnce()
+                await self.refreshStats(client: self.makeClient(), force: true)
+            }
         }
     }
 
@@ -90,6 +98,16 @@ class MemoryManager {
 
     /// A client for per-user-action calls (browse, search, import, namespaces…).
     func makeClient() -> MemoryClient { MemoryClient(base: apiBase) }
+
+    /// Recount the Store panel now, skipping the usual interval.
+    ///
+    /// For callers that just changed what the counts count — forgetting a
+    /// memory is the one in the app today. Without this the panel would keep
+    /// showing the old number for up to `statsInterval` after the row vanished
+    /// from the tree, which reads as a bug in the delete.
+    func invalidateStats() {
+        Task { await refreshStats(client: makeClient(), force: true) }
+    }
 
     /// App-scoped memory-browser state (the built tree + stats), cached so
     /// leaving and returning to the Browse screen doesn't reload, and so a
@@ -215,7 +233,18 @@ class MemoryManager {
     /// panel. They are fetched concurrently because a large store makes
     /// `/api/memory` the slowest of the three by far, and nothing here depends
     /// on anything else here.
-    private func refreshStats(client: MemoryClient) async {
+    ///
+    /// Deliberately on a slower clock than the poll loop. `/api/stats` used to
+    /// return counts alone; counting means downloading every memory and every
+    /// entity to read `.count` off them, which at `pollInterval` would re-fetch
+    /// the whole store every 5 seconds and get worse as the store grows. The
+    /// numbers are a rollup nobody watches tick, so a minute is soon enough —
+    /// and anything that *changes* them (an import, a delete) refreshes them
+    /// directly via `invalidateStats()`.
+    private func refreshStats(client: MemoryClient, force: Bool = false) async {
+        if !force, let last = lastStatsRefresh, stats != nil,
+           ContinuousClock.now - last < statsInterval { return }
+        lastStatsRefresh = .now
         async let memories = try? await client.list()
         async let entities = try? await client.entities()
         async let sessions = try? await client.sessions()

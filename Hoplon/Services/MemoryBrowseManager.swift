@@ -72,10 +72,15 @@ final class MemoryBrowseManager {
             async let entities = try? await client.entities()
             async let sessions = try? await client.sessions()
             let (m, e, se) = await (memories, entities, sessions)
-            if m == nil && e == nil && se == nil { return }
-            stats = MemoryStats(totalMemories: m?.count ?? 0,
-                                totalEntities: e?.count ?? 0,
-                                totalSessions: se?.count ?? 0)
+            // All three or none. Unlike `MemoryManager.refreshStats`, there is
+            // no previous value to fall back on here, so a partial result would
+            // publish a failed list as a confident "0" — a header reading
+            // "0 MEMORIES" over a store full of them. The metric renders "—"
+            // while `stats` is nil, which is the honest answer.
+            guard let m, let e, let se else { return }
+            stats = MemoryStats(totalMemories: m.count,
+                                totalEntities: e.count,
+                                totalSessions: se.count)
         }
     }
 
