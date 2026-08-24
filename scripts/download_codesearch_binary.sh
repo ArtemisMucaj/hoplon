@@ -5,14 +5,14 @@ set -euo pipefail
 # build_codesearch_binary.sh is the fallback if the download fails.
 #
 # v2.0.0+ is the post-extraction build (memory moved to memory-rs); the probes
-# below fail closed if a pin points back at an older asset. Pinned to v2.2.0,
-# the first release whose index endpoint takes a namespace — what lets the app
-# create a namespace and index into it without restarting the server.
+# below fail closed if a pin points back at an older asset. Pinned to v2.5.0,
+# the first release serving DELETE /api/llm/endpoints/{name} — what lets the
+# LLM pane remove a configured endpoint instead of only adding and editing.
 #
 # Override the pin with:
 #   CODESEARCH_VERSION=latest bash scripts/download_codesearch_binary.sh
 
-CODESEARCH_VERSION="${CODESEARCH_VERSION:-v2.4.0}"
+CODESEARCH_VERSION="${CODESEARCH_VERSION:-v2.5.0}"
 CODESEARCH_ASSET="${CODESEARCH_ASSET:-codesearch-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"
