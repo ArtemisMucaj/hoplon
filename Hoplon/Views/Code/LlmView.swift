@@ -214,6 +214,44 @@ struct LlmView: View {
                 .buttonStyle(.borderless).help("Reload models")
             Button { editingEndpoint = endpoint } label: { Image(systemName: "pencil") }
                 .buttonStyle(.borderless).help("Edit endpoint")
+            Button(role: .destructive) {
+                Task { await remove(endpoint) }
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).help("Remove endpoint")
+        }
+    }
+
+    /// Remove one endpoint, mirroring the Memory pane. The refreshed list comes
+    /// back from the server, so the active endpoint the server picked after the
+    /// removal is whatever renders — the view never guesses it.
+    private func remove(_ endpoint: LlmEndpoint) async {
+        do {
+            let response = try await manager.makeClient().deleteLlmEndpoint(name: endpoint.name)
+            endpoints = response
+            endpointModels.removeValue(forKey: endpoint.name)
+            // A sheet open on the endpoint we just removed would re-create it on
+            // Save, since the editor persists with PUT.
+            if editingEndpoint?.name == endpoint.name { editingEndpoint = nil }
+            endpointsError = nil
+            // Usage bindings are not view-derived: the server keeps naming the
+            // removed endpoint (verified against a codesearch serving DELETE),
+            // so the rows above have to be re-read rather than recomputed.
+            loadUsages()
+        } catch let error as CodesearchClient.ClientError {
+            // codesearch served this route PUT-only through v2.4.0. Reporting the
+            // raw 405 would read as a bug in Hoplon rather than a build that
+            // can't do it yet. See ArtemisMucaj/codesearch#240.
+            if case .http(status: 405, message: _) = error {
+                endpointsError = """
+                    The bundled codesearch can't remove LLM endpoints yet — its \
+                    management API serves no delete. A later codesearch release \
+                    will add it.
+                    """
+            } else {
+                endpointsError = error.errorDescription ?? error.localizedDescription
+            }
+        } catch {
+            endpointsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
