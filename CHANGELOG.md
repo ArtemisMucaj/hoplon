@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.10.1...hoplon-v0.11.0) (2026-08-24)
+
+
+### Features
+
+* **code:** remove button for codesearch LLM endpoints ([#43](https://github.com/ArtemisMucaj/hoplon/issues/43)) ([4857772](https://github.com/ArtemisMucaj/hoplon/commit/4857772a897e84caf2ce18f9abd2ab94841f7677)), closes [#42](https://github.com/ArtemisMucaj/hoplon/issues/42)
+
 ## [0.10.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.10.0...hoplon-v0.10.1) (2026-08-23)
 
 
