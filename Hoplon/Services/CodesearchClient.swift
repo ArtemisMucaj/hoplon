@@ -291,9 +291,13 @@ struct CodesearchClient {
     /// refreshed endpoint list.
     ///
     /// Requires a codesearch that serves the route: it was PUT-only through
-    /// v2.4.0, which answers 405. `LlmView` surfaces that as "this build of
-    /// codesearch can't remove endpoints" rather than a bare HTTP error.
-    /// See ArtemisMucaj/codesearch#240.
+    /// v2.4.0, which answers 405. `LlmView` surfaces that as "the bundled
+    /// codesearch can't remove endpoints yet" rather than a bare HTTP error.
+    ///
+    /// The server also clears what referenced the endpoint — promoting another
+    /// active one, and dropping usage bindings that named it — so callers must
+    /// re-read the usages rather than assume only this list changed.
+    /// Added in ArtemisMucaj/codesearch#241.
     @discardableResult
     func deleteLlmEndpoint(name: String) async throws -> LlmEndpointsResponse {
         let encoded = encodeSegment(name)

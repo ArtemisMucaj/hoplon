@@ -233,14 +233,15 @@ struct LlmView: View {
             // Save, since the editor persists with PUT.
             if editingEndpoint?.name == endpoint.name { editingEndpoint = nil }
             endpointsError = nil
-            // Usage bindings are not view-derived: the server keeps naming the
-            // removed endpoint (verified against a codesearch serving DELETE),
-            // so the rows above have to be re-read rather than recomputed.
+            // Usage bindings live on the server, not in anything derived from
+            // `endpoints`: removing an endpoint drops the bindings that named
+            // it, so the usages above fall back to inheriting the active one.
+            // Re-read them rather than trying to recompute the fallback here.
             loadUsages()
         } catch let error as CodesearchClient.ClientError {
             // codesearch served this route PUT-only through v2.4.0. Reporting the
-            // raw 405 would read as a bug in Hoplon rather than a build that
-            // can't do it yet. See ArtemisMucaj/codesearch#240.
+            // raw 405 would read as a bug in Hoplon rather than a bundled binary
+            // that predates the route (added in ArtemisMucaj/codesearch#241).
             if case .http(status: 405, message: _) = error {
                 endpointsError = """
                     The bundled codesearch can't remove LLM endpoints yet — its \
