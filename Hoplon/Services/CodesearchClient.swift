@@ -287,6 +287,23 @@ struct CodesearchClient {
         return try decode(LlmEndpointsResponse.self, from: data, response: response)
     }
 
+    /// `DELETE /api/llm/endpoints/{name}` — remove an endpoint. Returns the
+    /// refreshed endpoint list.
+    ///
+    /// Requires a codesearch that serves the route: it was PUT-only through
+    /// v2.4.0, which answers 405. `LlmView` surfaces that as "this build of
+    /// codesearch can't remove endpoints" rather than a bare HTTP error.
+    /// See ArtemisMucaj/codesearch#240.
+    @discardableResult
+    func deleteLlmEndpoint(name: String) async throws -> LlmEndpointsResponse {
+        let encoded = encodeSegment(name)
+        var req = URLRequest(url: try url("/api/llm/endpoints/\(encoded)"))
+        req.httpMethod = "DELETE"
+        req.timeoutInterval = 15
+        let (data, response) = try await session.data(for: req)
+        return try decode(LlmEndpointsResponse.self, from: data, response: response)
+    }
+
     /// `POST /api/llm/active` — set the active OpenAI endpoint. Returns the
     /// refreshed endpoint list.
     @discardableResult
