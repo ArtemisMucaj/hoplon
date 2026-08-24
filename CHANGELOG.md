@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.11.0...hoplon-v1.0.0) (2026-08-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **memory:** upgrade to memory-rs v0.4.0, guardrail v0.14.1 ([#49](https://github.com/ArtemisMucaj/hoplon/issues/49))
+
+### Features
+
+* **memory:** upgrade to memory-rs v0.4.0, guardrail v0.14.1 ([#49](https://github.com/ArtemisMucaj/hoplon/issues/49)) ([ed2715f](https://github.com/ArtemisMucaj/hoplon/commit/ed2715fb2afeffc073fdf8647537a86c0ae52e4c))
+
 ## [0.11.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.10.1...hoplon-v0.11.0) (2026-08-24)
 
 
