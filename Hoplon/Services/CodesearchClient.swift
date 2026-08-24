@@ -290,10 +290,9 @@ struct CodesearchClient {
     /// `DELETE /api/llm/endpoints/{name}` — remove an endpoint. Returns the
     /// refreshed endpoint list.
     ///
-    /// Requires codesearch v2.5.0 or newer, where the route was added
-    /// (ArtemisMucaj/codesearch#241). Older builds serve this path PUT-only and
-    /// answer 405, which `LlmView` reports as a binary too old for the route
-    /// rather than as a bare HTTP error.
+    /// Requires codesearch v2.5.0 or newer, the pinned release. Older builds
+    /// serve this path PUT-only and answer 405, which surfaces as a plain HTTP
+    /// error.
     ///
     /// The server also clears what referenced the endpoint — promoting another
     /// active one, and dropping usage bindings that named it — so callers must

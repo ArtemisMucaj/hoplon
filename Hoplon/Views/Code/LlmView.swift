@@ -238,21 +238,6 @@ struct LlmView: View {
             // it, so the usages above fall back to inheriting the active one.
             // Re-read them rather than trying to recompute the fallback here.
             loadUsages()
-        } catch let error as CodesearchClient.ClientError {
-            // The route arrived in codesearch v2.5.0, which is what the app
-            // pins — but fetch_binaries.sh falls back to building from a
-            // sibling checkout, so an older binary can still end up bundled.
-            // Reporting the raw 405 would read as a bug in Hoplon rather than
-            // a binary that predates the route.
-            if case .http(status: 405, message: _) = error {
-                endpointsError = """
-                    This codesearch can't remove LLM endpoints — its management \
-                    API serves no delete. The route landed in v2.5.0; the \
-                    bundled binary is older than that.
-                    """
-            } else {
-                endpointsError = error.errorDescription ?? error.localizedDescription
-            }
         } catch {
             endpointsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
