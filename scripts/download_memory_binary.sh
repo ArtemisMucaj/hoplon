@@ -4,6 +4,10 @@ set -euo pipefail
 # Downloads the prebuilt `memory-rs` binary into Hoplon/Resources/.
 # build_memory_binary.sh is the fallback if the download fails.
 #
+# Pinned to v0.4.1, which fixes `GET /api/sessions` — it 500'd on the
+# `usize::MAX` limit the sessions controller passes, so the Store panel's
+# session count read 0 on v0.4.0.
+#
 # v0.4.0 simplifies the memory model to facts + entities. This is a BREAKING
 # upgrade and the app was migrated to match it:
 #   - GET /api/stats and GET /api/conflicts are gone. The Memory overview now
@@ -22,7 +26,7 @@ set -euo pipefail
 # Override the pin with:
 #   MEMORY_VERSION=latest bash scripts/download_memory_binary.sh
 
-MEMORY_VERSION="${MEMORY_VERSION:-v0.4.0}"
+MEMORY_VERSION="${MEMORY_VERSION:-v0.4.1}"
 MEMORY_ASSET="${MEMORY_ASSET:-memory-rs-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"
