@@ -177,6 +177,16 @@ is persisted together, so no restart is needed and the UI cannot drift from what
 the proxy is doing. The Backend URL field on the Process pane says plainly that
 it only seeds the first run.
 
+Which *models* each provider serves is discovered, not configured. The proxy
+asks every provider at startup and routes on that snapshot, while `/v1/models`
+is answered live — so a model loaded into a backend afterwards is advertised and
+refused at the same time. `POST /discovery` (guardrail v0.15.0) re-asks and
+rebuilds routing, and the pane drives it two ways: a "Check for New Models"
+button, and automatically after adding a provider, which otherwise reports no
+models at all because nothing has asked it. The run is best-effort per provider
+— one that cannot be reached keeps the catalogue it had rather than losing it,
+and the pane marks that section as showing what the provider last reported.
+
 Conversation grouping is not configurable. guardrails v0.12.0 removed
 `--match-conversations` and made it unconditional: Chat Completions is
 stateless, so every turn resends the transcript, and counting each resent prefix

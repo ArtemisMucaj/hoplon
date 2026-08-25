@@ -1,7 +1,8 @@
 import Foundation
 
 // Decodes the guardrail admin server's management API — `GET/POST/PATCH/DELETE
-// /providers` — which reads and changes what the proxy exposes, at runtime.
+// /providers` and `POST /discovery` — which reads and changes what the proxy
+// exposes, at runtime.
 //
 // The proxy's `config.json` is the source of truth and wins over CLI flags once
 // it exists, so this API (not the launch arguments) is how the app changes
@@ -18,6 +19,58 @@ nonisolated struct ProvidersResponse: Decodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey { case providers }
+}
+
+/// The `POST /discovery` envelope.
+///
+/// Carries the same `providers` snapshot `GET /providers` returns — so a run
+/// re-renders from its own response like every other call here — plus a
+/// per-provider account of what the run actually did.
+nonisolated struct DiscoveryResponse: Decodable, Equatable {
+    var discovery: [ProviderDiscovery]
+    var providers: [ProviderConfig]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        discovery = (try? c.decode([ProviderDiscovery].self, forKey: .discovery)) ?? []
+        providers = (try? c.decode([ProviderConfig].self, forKey: .providers)) ?? []
+    }
+
+    enum CodingKeys: String, CodingKey { case discovery, providers }
+}
+
+/// What a discovery run did to one provider's catalogue.
+nonisolated struct ProviderDiscovery: Decodable, Equatable, Identifiable {
+    var name: String
+    /// Models in the catalogue now in effect — the fresh reply when there was
+    /// one, otherwise the one this provider kept.
+    var models: Int
+    /// Whether the run replaced that catalogue. `false` with no `error` means
+    /// the provider answered but reported nothing, so what it had was kept —
+    /// the proxy treats an empty reply as "nothing to report" rather than
+    /// "nothing served", because a local server answering while it loads its
+    /// index would otherwise have its whole catalogue wiped.
+    var refreshed: Bool
+    /// Why the provider could not be asked, when it could not be. The run
+    /// still succeeds: the providers that answered were refreshed.
+    var error: String?
+
+    var id: String { name }
+
+    /// The provider could not be reached, so its models are whatever it last
+    /// reported rather than what it serves now. Worth saying in the UI: the
+    /// list looks the same either way.
+    var isStale: Bool { error != nil }
+
+    enum CodingKeys: String, CodingKey { case name, models, refreshed, error }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name      = (try? c.decode(String.self, forKey: .name)) ?? "unknown"
+        models    = (try? c.decode(Int.self, forKey: .models)) ?? 0
+        refreshed = (try? c.decode(Bool.self, forKey: .refreshed)) ?? false
+        error     = try? c.decode(String.self, forKey: .error)
+    }
 }
 
 /// One upstream the proxy routes to, and the exposure policy for its models.

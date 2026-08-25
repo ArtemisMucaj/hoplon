@@ -49,6 +49,19 @@ struct GuardrailsProvidersPane: View {
                     section(for: provider)
                 }
                 Section {
+                    // Hidden rather than disabled on a proxy without the route:
+                    // a control that cannot work is worse than one that is not
+                    // there, and the pane already treats a 404 as "this proxy
+                    // does not have that" everywhere else.
+                    if !providers.discoveryUnavailable {
+                        Button {
+                            Task { await providers.rediscover() }
+                        } label: {
+                            Label("Check for New Models", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(providers.isDiscovering)
+                        .help("Ask every provider what it serves now. The proxy asks once at startup, so a model loaded after that is listed but not routed until this runs.")
+                    }
                     Button {
                         newName = ""; newBaseURL = ""
                         showingAdd = true
@@ -89,8 +102,9 @@ struct GuardrailsProvidersPane: View {
                 confirmingRemoval = nil
             }
         } message: {
-            // Removal loses the per-model choices; the models themselves are
-            // rediscovered if the provider is added back.
+            // Removal loses the per-model choices, and the proxy also forgets
+            // what the provider reported — so adding it back shows no models
+            // until discovery runs, which `add` now triggers itself.
             Text("The proxy stops routing to it, and the exposure choices made for its models are lost.")
         }
     }
@@ -115,8 +129,23 @@ struct GuardrailsProvidersPane: View {
             .disabled(providers.busy.contains(provider.name))
             .help("A model this provider starts offering is served without a visit to this screen.")
 
+            // The models below are whatever this provider last reported, which
+            // looks no different from a fresh list — so an unreachable provider
+            // has to say so, or the pane quietly presents stale routing as
+            // current. The proxy keeps that catalogue on purpose: dropping it
+            // on a blip would refuse models that are still live.
+            if let outcome = providers.lastDiscovery[provider.name], outcome.isStale {
+                Label(
+                    "Could not be reached at the last check — showing what it last reported.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help(outcome.error ?? "")
+            }
+
             if provider.models.isEmpty {
-                Text("No models discovered. A provider that started after the proxy claims none until the next restart.")
+                Text("No models discovered. A provider that started after the proxy claims none until it is asked again — use “Check for New Models” below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

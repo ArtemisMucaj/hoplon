@@ -33,10 +33,23 @@ set -euo pipefail
 # duplicates from /v1/models. Nothing the app drives moved; the providers pane
 # just stops showing the same model once per provider.
 #
+# v0.14.2 refuses a model no provider serves instead of forwarding it to the
+# default one as a guess. That makes the proxy's startup catalogue load-bearing
+# for routing, which is what v0.15.0 then makes refreshable.
+#
+# v0.15.0 adds POST /discovery, the first route the providers pane can use to
+# re-ask every provider what it serves. Before it, a model loaded into a backend
+# after the proxy started was listed by /v1/models and refused by routing until
+# a restart, and a provider added through the pane never reported any models at
+# all — nothing asked it. There is no probe here, unlike codesearch and
+# memory-rs: the pane treats the route's 404 as "this proxy does not have that"
+# and hides the control, so an older pin degrades to the previous behaviour
+# rather than breaking.
+#
 # The version is pinned so the bundled binary is reproducible. Override with:
 #   GUARDRAILS_VERSION=latest bash scripts/download_guardrails_binary.sh
 
-GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.14.1}"
+GUARDRAILS_VERSION="${GUARDRAILS_VERSION:-v0.15.0}"
 GUARDRAILS_ASSET="${GUARDRAILS_ASSET:-guardrail-macos-aarch64}"
 
 source "$(dirname "$0")/lib/fetch_release_asset.sh"
