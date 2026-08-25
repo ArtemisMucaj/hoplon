@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v1.0.0...hoplon-v1.1.0) (2026-08-25)
+
+
+### Features
+
+* **guardrails:** re-ask providers what they serve, from the pane ([#51](https://github.com/ArtemisMucaj/hoplon/issues/51)) ([21d64bf](https://github.com/ArtemisMucaj/hoplon/commit/21d64bfa5ad27c854420d58a37a8a25a2f781af8))
+
 ## [1.0.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v0.11.0...hoplon-v1.0.0) (2026-08-24)
 
 
