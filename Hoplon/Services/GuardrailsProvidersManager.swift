@@ -75,6 +75,20 @@ class GuardrailsProvidersManager {
 
     private var client: GuardrailsClient { GuardrailsClient(base: adminBase) }
 
+    /// Replace the provider snapshot, dropping discovery outcomes for providers
+    /// that no longer exist.
+    ///
+    /// `lastDiscovery` is keyed by name and would otherwise outlive the
+    /// provider it describes: remove one and add another under the same name,
+    /// and the new one inherits the old one's verdict — shown as "could not be
+    /// reached" when it has simply never been asked. The proxy's own catalogue
+    /// had the same trap, keyed the same way.
+    private func replace(_ snapshot: [ProviderConfig]) {
+        providers = snapshot
+        let names = Set(snapshot.map(\.name))
+        lastDiscovery = lastDiscovery.filter { names.contains($0.key) }
+    }
+
     // MARK: - Providers
 
     func load() async {
@@ -82,12 +96,12 @@ class GuardrailsProvidersManager {
             isLoading = true
             defer { isLoading = false }
             do {
-                providers = try await client.providers()
+                replace(try await client.providers())
                 isUnavailable = false
                 lastError = nil
             } catch GuardrailsClient.ClientError.notConfigured {
                 isUnavailable = true
-                providers = []
+                replace([])
             } catch {
                 lastError = error.localizedDescription
             }
@@ -158,7 +172,7 @@ class GuardrailsProvidersManager {
             defer { isDiscovering = false }
             do {
                 let result = try await client.runDiscovery()
-                providers = result.providers
+                replace(result.providers)
                 lastDiscovery = Dictionary(
                     result.discovery.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last }
                 )
@@ -189,7 +203,7 @@ class GuardrailsProvidersManager {
             busy.insert(name)
             defer { busy.remove(name) }
             do {
-                providers = try await operation()
+                replace(try await operation())
                 lastError = nil
             } catch GuardrailsClient.ClientError.notConfigured {
                 isUnavailable = true
@@ -197,7 +211,7 @@ class GuardrailsProvidersManager {
                 lastError = error.localizedDescription
                 // The server refused, so re-read rather than leaving the UI
                 // showing the change the user attempted.
-                providers = (try? await client.providers()) ?? providers
+                replace((try? await client.providers()) ?? providers)
             }
         }
     }
