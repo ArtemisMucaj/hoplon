@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 
 // Shared presentation components: badges, a lightweight markdown renderer,
-// and a draggable two-pane split. Used across the Memory screens.
+// and a copy-to-clipboard button.
 
 // MARK: - Badge
 
@@ -34,7 +35,7 @@ struct MarkdownText: View {
         case heading(level: Int, text: String)
         case table(header: [String], rows: [[String]])
         case paragraph(String)
-        /// A `## Label — body` section (memory experiences write these, often as
+        /// A `## Label — body` section (often written as
         /// `- ## Label — …`). Rendered as a bold label above its body.
         case labeledSection(label: String, body: String)
         case bullet(String)
@@ -149,7 +150,7 @@ struct MarkdownText: View {
                 flushParagraph(); i += 1; continue
             }
             // Strip a leading list marker so `- ## Label` and `* item` are seen
-            // for what they contain (memory experiences write `- ## Situation …`).
+            // for what they contain (e.g. `- ## Situation …`).
             var body = trimmed
             let isListItem = body.hasPrefix("- ") || body.hasPrefix("* ")
             if isListItem { body = String(body.dropFirst(2)).trimmingCharacters(in: .whitespaces) }
@@ -195,60 +196,29 @@ struct MarkdownText: View {
     }
 }
 
-// MARK: - ResizableSplit
+// MARK: - CopyButton
 
-/// A two-pane horizontal split with a drag-resizable divider, built from plain
-/// SwiftUI stacks. Use instead of `HSplitView` inside the detail column: the
-/// AppKit-backed split ignores the safe-area inset the floating sidebar
-/// contributes (macOS 26), so its left pane slid under the sidebar and was
-/// clipped — plain stacks respect the inset.
-struct ResizableSplit<Left: View, Right: View>: View {
-    private let leftMin: CGFloat
-    private let rightMin: CGFloat
-    private let left: Left
-    private let right: Right
-    @State private var leftWidth: CGFloat
-
-    init(leftIdeal: CGFloat, leftMin: CGFloat, rightMin: CGFloat,
-         @ViewBuilder left: () -> Left, @ViewBuilder right: () -> Right) {
-        self.leftMin = leftMin
-        self.rightMin = rightMin
-        self.left = left()
-        self.right = right()
-        _leftWidth = State(initialValue: leftIdeal)
-    }
+/// A small borderless copy-to-clipboard button that flips to a checkmark for a
+/// beat after copying. `text` is a closure so callers can resolve the body
+/// lazily at click time.
+struct CopyButton: View {
+    let text: () -> String
+    var help: String = "Copy"
+    @State private var copied = false
 
     var body: some View {
-        GeometryReader { geo in
-            // Clamp so neither pane can be dragged (or window-resized) away.
-            let width = min(max(leftWidth, leftMin), max(leftMin, geo.size.width - rightMin))
-            HStack(spacing: 0) {
-                left.frame(width: width).frame(maxHeight: .infinity)
-                splitter(total: geo.size.width)
-                right.frame(maxWidth: .infinity, maxHeight: .infinity)
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text(), forType: .string)
+            withAnimation { copied = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                withAnimation { copied = false }
             }
-            .coordinateSpace(name: "resizable-split")
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(copied ? .green : .secondary)
         }
-    }
-
-    private func splitter(total: CGFloat) -> some View {
-        Divider()
-            .frame(maxHeight: .infinity)
-            // An 8pt invisible grab strip over the 1pt line — dragging the bare
-            // divider would demand pixel-perfect aim.
-            .overlay {
-                Color.clear
-                    .frame(width: 8)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 1, coordinateSpace: .named("resizable-split"))
-                            .onChanged { v in
-                                leftWidth = min(max(v.location.x, leftMin), max(leftMin, total - rightMin))
-                            }
-                    )
-                    .onHover { inside in
-                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
-                    }
-            }
+        .buttonStyle(.borderless)
+        .help(help)
     }
 }

@@ -24,13 +24,6 @@ struct MenuBarView: View {
                 detail: state.guardrailsManager.isRunning ? "port \(state.guardrailsManager.listenPort)" : nil,
                 toggle: { state.guardrailsEnabled = !state.guardrailsManager.isRunning }
             )
-            serviceRow(
-                icon: AppSection.memory.systemImage,
-                name: "Memory",
-                status: state.memoryStatus,
-                detail: state.memoryManager.isRunning ? "port \(state.memoryManager.port)" : nil,
-                toggle: { state.memoryEnabled = !state.memoryManager.isRunning }
-            )
 
             Divider()
 
@@ -50,7 +43,6 @@ struct MenuBarView: View {
                 Button {
                     state.stopProxy()
                     state.stopGuardrails()
-                    state.stopMemory()
                     NSApp.terminate(nil)
                 } label: {
                     Label("Quit", systemImage: "power")

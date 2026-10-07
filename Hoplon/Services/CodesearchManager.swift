@@ -7,7 +7,7 @@ import Observation
 /// plus periodic polling of the management API's `/health`, `/api/stats`, and
 /// `/api/repositories` endpoints that power the Code Intelligence screens.
 ///
-/// The management API surface used by the views (search, memory, indexing,
+/// The management API surface used by the views (search, indexing,
 /// explain) lives in `CodesearchClient`, constructed on demand from `mgmtBase`.
 /// This type stays focused on lifecycle + liveness/rollup polling.
 @Observable
@@ -88,11 +88,8 @@ class CodesearchManager {
     /// The MCP endpoint clients point at (for "copy endpoint").
     var mcpEndpoint: String { "http://127.0.0.1:\(mcpPort)/mcp" }
 
-    /// A client for per-user-action management calls (search, memory, indexing…).
+    /// A client for per-user-action management calls (search, indexing…).
     func makeClient() -> CodesearchClient { CodesearchClient(base: mgmtBase) }
-
-    // Long-term memory moved to memory-rs, so the browse + session-import
-    // sub-managers that used to live here are on `MemoryManager` now.
 
     /// App-scoped LLM feature-explanation state (streams + results by feature
     /// id), so an in-flight explanation keeps streaming after the user leaves

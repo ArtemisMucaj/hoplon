@@ -37,7 +37,6 @@ jobs:
           RES="build/DerivedData/Build/Products/Release/Hoplon.app/Contents/Resources"
           missing=0
           for f in skills-manifest.json \
-                   skill-memory-rs-mcp.md skill-memory-rs-cli.md \
                    skill-codesearch-mcp.md skill-codesearch-cli.md; do
             if [ ! -s "$RES/$f" ]; then
               echo "MISSING from the built app: $f"
@@ -49,6 +48,6 @@ jobs:
             ls -l "$RES"
             exit 1
           fi
-          echo "All four skills and the manifest are bundled:"
+          echo "Both skills and the manifest are bundled:"
           ls -l "$RES"/skill-*.md "$RES/skills-manifest.json"
           cat "$RES/skills-manifest.json"

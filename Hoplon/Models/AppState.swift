@@ -13,7 +13,6 @@ struct DiscoveredTool: Identifiable, Codable {
 enum AppSection: String, CaseIterable, Identifiable {
     case proxy
     case guardrails
-    case memory
     case code
 
     var id: String { rawValue }
@@ -22,7 +21,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .proxy:      return "Proxy"
         case .guardrails: return "Guardrails"
-        case .memory:     return "Memory"
         case .code:       return "Code Intelligence"
         }
     }
@@ -31,7 +29,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .proxy:      return "point.3.connected.trianglepath.dotted"
         case .guardrails: return "shield.lefthalf.filled"
-        case .memory:     return "brain"
         case .code:       return "curlybraces.square"
         }
     }
@@ -76,13 +73,12 @@ final class AppState {
     var servers: [String: MCPServer] = [:]
     let proxyManager: ProxyManager
     let guardrailsManager: GuardrailsManager
-    let memoryManager: MemoryManager
     let codesearchManager: CodesearchManager
-    /// Installs `~/.local/bin` symlinks for the bundled codesearch / memory-rs
-    /// CLIs. No process to supervise, so it needs no start/stop wiring.
+    /// Installs a `~/.local/bin` symlink for the bundled codesearch CLI. No
+    /// process to supervise, so it needs no start/stop wiring.
     let cliLinkManager = CliLinkManager()
-    /// Installs the bundled memory-rs / codesearch agent skills into
-    /// `~/.agents/skills`. Also stateless as far as processes go.
+    /// Installs the bundled codesearch agent skills into `~/.agents/skills`.
+    /// Also stateless as far as processes go.
     let skillManager = SkillInstallManager()
     var discoveredTools: [String: [DiscoveredTool]] = [:]
     var isDiscoveringTools = false
@@ -179,36 +175,6 @@ final class AppState {
         }
     }
 
-    // MARK: - Memory settings (persisted in UserDefaults)
-
-    /// Whether the memory-rs `serve` process should run. Toggling starts/stops it.
-    var memoryEnabled: Bool {
-        didSet {
-            UserDefaults.standard.set(memoryEnabled, forKey: "memoryEnabled")
-            if memoryEnabled { startMemory() } else { stopMemory() }
-        }
-    }
-    /// Single port for both the REST API and the MCP endpoint at `/mcp`.
-    var memoryPort: Int {
-        didSet {
-            let clamped = max(1024, min(65535, memoryPort))
-            if memoryPort != clamped { memoryPort = clamped; return }
-            UserDefaults.standard.set(memoryPort, forKey: "memoryPort")
-            memoryManager.port = memoryPort
-            // The managed proxy entry embeds this port, so it goes stale the
-            // moment the port moves — re-point it whether or not we restart.
-            syncMemoryProxyRegistration()
-            restartMemoryIfRunning()
-        }
-    }
-    /// Bind 0.0.0.0 instead of 127.0.0.1 (`--public`).
-    var memoryPublic: Bool {
-        didSet {
-            UserDefaults.standard.set(memoryPublic, forKey: "memoryPublic")
-            memoryManager.publicBind = memoryPublic
-            restartMemoryIfRunning()
-        }
-    }
     // MARK: - Code Intelligence settings (persisted in UserDefaults)
 
     /// Whether the codesearch `serve` process should run. Toggling starts/stops it.
@@ -250,19 +216,9 @@ final class AppState {
         }
     }
 
-    /// Whether to keep a `memory` entry in the proxy's servers.json pointing at
-    /// the running memory service, so agents reach memory tools through the one
-    /// proxy endpoint. Turning it off removes the managed entry.
-    var registerMemoryWithProxy: Bool {
-        didSet {
-            UserDefaults.standard.set(registerMemoryWithProxy, forKey: "registerMemoryWithProxy")
-            syncMemoryProxyRegistration()
-        }
-    }
-
-    /// Same for Code Intelligence: keep a `codesearch` entry in the proxy's
-    /// servers.json pointing at the running codesearch MCP server, so agents
-    /// reach code search / call graph tools through the one proxy endpoint.
+    /// Whether to keep a `codesearch` entry in the proxy's servers.json pointing
+    /// at the running codesearch MCP server, so agents reach code search / call
+    /// graph tools through the one proxy endpoint.
     /// Turning it off removes the managed entry.
     var registerCodesearchWithProxy: Bool {
         didSet {
@@ -275,7 +231,6 @@ final class AppState {
     @ObservationIgnored private var fileWatcherFD: Int32 = -1
     @ObservationIgnored private var reloadWorkItem: DispatchWorkItem?
     @ObservationIgnored private var guardrailsRestartWork: DispatchWorkItem?
-    @ObservationIgnored private var memoryRestartWork: DispatchWorkItem?
     @ObservationIgnored private var codesearchRestartWork: DispatchWorkItem?
 
     /// Management API port is always the MCP port + 1 (panoply's layout).
@@ -296,12 +251,6 @@ final class AppState {
         return .stopped
     }
 
-    var memoryStatus: ServiceStatus {
-        if memoryManager.isStarting { return .starting }
-        if memoryManager.isRunning { return memoryManager.isReachable ? .running : .runningUnreachable }
-        return .stopped
-    }
-
     var codesearchStatus: ServiceStatus {
         if codesearchManager.isStarting { return .starting }
         if codesearchManager.isRunning { return codesearchManager.isReachable ? .running : .runningUnreachable }
@@ -312,7 +261,6 @@ final class AppState {
         switch section {
         case .proxy:      return proxyStatus
         case .guardrails: return guardrailsStatus
-        case .memory:     return memoryStatus
         case .code:       return codesearchStatus
         }
     }
@@ -388,24 +336,6 @@ final class AppState {
             copilot: grCopilot
         )
 
-        // Memory settings (fall back to memory-rs's own `serve` default).
-        let savedMemPort = UserDefaults.standard.integer(forKey: "memoryPort")
-        let memPort      = (1024...65535).contains(savedMemPort) ? savedMemPort : 8766
-        let memPublic    = UserDefaults.standard.bool(forKey: "memoryPublic")
-        self.memoryEnabled = UserDefaults.standard.bool(forKey: "memoryEnabled")
-        self.memoryPort    = memPort
-        self.memoryPublic  = memPublic
-        self.memoryManager = MemoryManager(port: memPort, publicBind: memPublic)
-        // Same local model server guardrails points at, so a first run gets
-        // memory extraction without setup. Separate from codesearch's — the two
-        // services keep independent LLM configs.
-        self.memoryManager.llmAutodetectBase = grBackend
-        // Default ON: the whole point of running both is that agents reach
-        // memory through the single proxy endpoint. `object(forKey:)` (not
-        // `bool(forKey:)`) so an unset default reads as "not yet chosen".
-        self.registerMemoryWithProxy =
-            (UserDefaults.standard.object(forKey: "registerMemoryWithProxy") as? Bool) ?? true
-
         // Code Intelligence settings (fall back to codesearch's `serve` defaults).
         let savedCsMcpPort  = UserDefaults.standard.integer(forKey: "codesearchMcpPort")
         let savedCsMgmtPort = UserDefaults.standard.integer(forKey: "codesearchMgmtPort")
@@ -423,8 +353,8 @@ final class AppState {
         // codesearch's LLM endpoint (if the user hasn't configured one), so
         // community names + call-flow explanations work without setup.
         self.codesearchManager.llmAutodetectBase = grBackend
-        // Default ON, same reasoning as memory's: running both is only useful if
-        // agents reach code tools through the single proxy endpoint.
+        // Default ON: running both is only useful if agents reach code tools
+        // through the single proxy endpoint.
         // `object(forKey:)` so an unset default reads as "not yet chosen".
         self.registerCodesearchWithProxy =
             (UserDefaults.standard.object(forKey: "registerCodesearchWithProxy") as? Bool) ?? true
@@ -437,13 +367,19 @@ final class AppState {
         loadConfig()
         startFileWatcher()
 
-        // Reconcile the managed `memory` proxy entry against what's actually
+        // Reconcile the managed proxy entries against what's actually
         // configured. Property observers don't fire during init, and neither
-        // start/stop path runs when memory is disabled — so without this, a
+        // start/stop path runs when a service is disabled — so without this, a
         // managed entry left over from a previous run would linger in
         // servers.json and the proxy would keep trying to reach a dead port.
-        syncMemoryProxyRegistration()
+        // That includes the `memory` entry earlier versions managed for
+        // memory-rs, which no longer ships: it is only ever removed now.
+        applyProxyRegistration(.retiredMemory, shouldRegister: false, endpoint: "")
         syncCodesearchProxyRegistration()
+        // The same release left a `memory-rs` CLI link and its agent skills
+        // behind; clear the ones Hoplon created.
+        cliLinkManager.removeRetiredLinks()
+        skillManager.removeRetiredSkills()
 
         // Auto-discover tools when the proxy transitions to running.
         proxyManager.onBecameRunning = { [weak self] in
@@ -620,38 +556,6 @@ final class AppState {
         if guardrailsManager.isRunning || guardrailsManager.isStarting { restartGuardrails() }
     }
 
-    // MARK: - Memory process
-
-    /// Start memory-rs if the user has enabled it. Called at app launch.
-    func startMemoryIfEnabled() {
-        if memoryEnabled { startMemory() }
-    }
-
-    func startMemory() {
-        memoryManager.startBundled()
-        syncMemoryProxyRegistration()
-    }
-
-    func stopMemory() {
-        memoryRestartWork?.cancel()
-        memoryRestartWork = nil
-        memoryManager.stop()
-        syncMemoryProxyRegistration()
-    }
-
-    /// Restart, coalescing rapid successive calls into one stop + delayed start.
-    func restartMemory() {
-        memoryManager.stop()
-        memoryRestartWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.startMemory() }
-        memoryRestartWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
-
-    private func restartMemoryIfRunning() {
-        if memoryManager.isRunning || memoryManager.isStarting { restartMemory() }
-    }
-
     // MARK: - Codesearch process
 
     /// Start codesearch if the user has enabled it. Called at app launch.
@@ -686,21 +590,12 @@ final class AppState {
 
     // MARK: - Proxy registration
 
-    /// Keep the proxy's `memory` server entry in step with the memory service.
+    /// Keep the proxy's `codesearch` server entry in step with the service.
     ///
     /// When both the toggle and the service are on, the entry points at the
     /// running MCP endpoint; otherwise the managed entry is removed. Only ever
     /// touches the one entry it owns (marked via `managedMarker`), so a
     /// hand-written config survives untouched.
-    func syncMemoryProxyRegistration() {
-        applyProxyRegistration(
-            .memory,
-            shouldRegister: registerMemoryWithProxy && memoryEnabled,
-            endpoint: memoryManager.mcpEndpoint
-        )
-    }
-
-    /// Same for Code Intelligence's `codesearch` entry.
     func syncCodesearchProxyRegistration() {
         applyProxyRegistration(
             .codesearch,

@@ -3,8 +3,8 @@ import AppKit
 
 /// Code Intelligence landing overview: index-wide stats plus the indexed
 /// namespaces shown as a grid of clickable squares. This is what the section
-/// shows before you drill into Memory or Import Sessions from the sidebar — an
-/// at-a-glance map of what codesearch has indexed. Clicking a namespace square
+/// shows before you drill into a namespace from the sidebar — an at-a-glance
+/// map of what codesearch has indexed. Clicking a namespace square
 /// opens its deep-dive (with a back button); the drilled namespace is held on
 /// `NavigationModel` so the 5s status poll can't drop it. Data comes from the
 /// management API's `/api/stats` and `/api/repositories`, already polled by
@@ -98,8 +98,7 @@ struct CodeOverviewView: View {
     ///
     /// The folder picker used to follow immediately, so a namespace only ever
     /// came into being as a side effect of indexing. Creating it empty makes it
-    /// a container the user fills from its detail view — the same shape as a
-    /// Memory namespace, which is created bare and gains projects afterwards.
+    /// a container the user fills from its detail view.
     private var namespaceNameSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("New namespace").font(.headline)

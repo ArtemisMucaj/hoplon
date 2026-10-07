@@ -16,12 +16,7 @@ almost always "that service's API doesn't expose it yet", not "add it to Hoplon"
 |---|---|---|---|---|
 | Proxy | `panoply` | [panoply](https://github.com/ArtemisMucaj/panoply) | `PORT` (MCP) + `PORT+1` (REST) | Aggregates every configured MCP server behind 3 tools (`load_tools` → `search_tools` → `call_tool`) |
 | Guardrails | `guardrail` | [guardrails](https://github.com/ArtemisMucaj/guardrails) | `--listen` + `--admin-listen` | Transparent proxy repairing malformed tool calls; routes to several providers and records token usage |
-| Memory | `memory-rs` | [memory-rs](https://github.com/ArtemisMucaj/memory-rs) | one port: REST **and** MCP at `/mcp` | Long-term memory over imported assistant sessions; hybrid recall |
 | Code Intelligence | `codesearch` | [codesearch](https://github.com/ArtemisMucaj/codesearch) | `--mcp-port` + `--mgmt-port` | Semantic code search, call graphs, Leiden communities + couplings |
-
-Memory being a single port is the one thing that breaks the pattern — every
-other service takes two. `memory-rs serve --port N` mounts the MCP
-streamable-HTTP service onto the same listener as the REST API.
 
 ## Layout
 
@@ -32,7 +27,8 @@ Hoplon/
   Models/
     AppState.swift         # the one @Observable source of truth; settings, proxy REST calls
     NavigationModel.swift  # sidebar selection ↔ section/sub-tab projection
-    MemoryModels.swift     # memory-rs DTOs (lenient, raw-JSON-backed)
+    CodesearchModels.swift # codesearch DTOs (lenient)
+    SharedModels.swift     # `lenient` helper, JSONValue, /api/llm/usages DTOs
     ServerConfig.swift     # servers.json shape
     GuardrailsStats.swift  # admin /stats + /activity + /info shapes
     GuardrailsPeriod.swift # the window every Guardrails figure is computed over
@@ -44,32 +40,26 @@ Hoplon/
     GuardrailsManager.swift
     GuardrailsClient.swift        #   async client for /providers + Copilot login
     GuardrailsProvidersManager.swift # app-scoped provider/login state
-    MemoryManager.swift    #   memory-rs lifecycle; owns browse + import sub-managers
-    MemoryClient.swift     #   async REST client for memory-rs
     CodesearchManager.swift     # codesearch lifecycle + rollup polling
     CodesearchClient.swift      #   async REST + SSE client for codesearch
     FeatureExplainManager.swift # app-scoped streamed call-flow explanations
     GraphLayout.swift           # force-directed layout for the community graph
-    MemoryBrowseManager.swift   # app-scoped browse state (cached tree)
-    SessionImportManager.swift  # discovered sessions + background-import status
-    ProxyRegistration.swift     # the managed `memory`/`codesearch` servers.json entries
-    CliLinkManager.swift        # ~/.local/bin symlinks for the bundled CLIs
+    ProxyRegistration.swift     # the managed `codesearch` servers.json entry
+    CliLinkManager.swift        # ~/.local/bin symlink for the bundled codesearch CLI
     SkillInstallManager.swift   # ~/.agents/skills installs, one variant per service
   Views/
     RootView.swift         # 2-column split; the always-on sidebar
-    SettingsView.swift     # per-service panes (Memory + Code nest sub-panes); live
+    SettingsView.swift     # per-service panes (Guardrails + Code nest sub-panes); live
     MenuBarView.swift
     GuardrailsView.swift
     Guardrails/            # GuardrailsProvidersPane (settings ▸ Providers)
     PresetsView.swift  ServerDetailView.swift
     Proxy/ProxyDetailView.swift
-    Memory/                # MemoryDetailView (container), Overview, Browse,
-                           #   SessionImport, NamespaceDetail, DreamSettings
     Code/                  # CodeDetailView (container), Overview,
                            #   NamespaceGraph, NamespaceInsight, Llm
     Components/            # DesignSystem.swift, SharedComponents.swift,
-                           #   LlmUsagesSection + LlmProviderRow (both LLM panes)
-  Resources/               # the four binaries + the four vendored skills —
+                           #   LlmUsagesSection + LlmProviderRow (the Code LLM pane)
+  Resources/               # the three binaries + the two vendored skills —
                            #   GITIGNORED, fetched by scripts/
 scripts/                   # download (pinned release) + build (sibling checkout) per binary,
                            #   plus the skill vendoring (pinned release commit)
@@ -81,7 +71,7 @@ scripts/                   # download (pinned release) + build (sibling checkout
 none of them and the app builds fine but can't start anything.
 
 ```bash
-bash scripts/fetch_binaries.sh     # all four; download where possible, build where not
+bash scripts/fetch_binaries.sh     # all three; download where possible, build where not
 xcodebuild -project Hoplon.xcodeproj -scheme Hoplon -configuration Debug build
 ```
 
@@ -91,39 +81,17 @@ Per-binary, if you need one in particular:
 bash scripts/download_panoply_binary.sh      # pinned release + SHA-256 verify
 bash scripts/download_guardrails_binary.sh
 bash scripts/download_codesearch_binary.sh   # pinned release (v2.5.0) + SHA-256 verify
-bash scripts/download_memory_binary.sh       # pinned release (v0.4.1) + SHA-256 verify
-bash scripts/build_memory_binary.sh          # builds from ../memory-rs (the fallback path)
 bash scripts/build_codesearch_binary.sh      # builds from ../codesearch (the fallback path)
 bash scripts/build_panoply_binary.sh         # builds from ../panoply
 bash scripts/download_codesearch_skills.sh   # pinned release COMMIT, vendored into Resources/
-bash scripts/download_memory_skills.sh
 ```
 
-All four binaries now ship as pinned release assets, so `fetch_binaries.sh`
+All three binaries ship as pinned release assets, so `fetch_binaries.sh`
 downloads each and falls back to a sibling build only if the download fails.
 codesearch is pinned to v2.5.0 (the first release serving
-`DELETE /api/llm/endpoints/{name}`, which the LLM pane's remove button needs)
-and memory-rs to v0.4.1 (the facts+entities model — see below). Both download
-scripts fail closed if a pin points at an asset that predates the feature the
-app drives it with.
-
-memory-rs v0.4.0 was a breaking change on both sides, so its guard is a
-two-way pin rather than a floor: the app was migrated off `/api/stats` and
-`/api/conflicts` (both removed), off the four-kind `MemoryKind` and the
-`status` filter (collapsed to `fact`, no lifecycle), and off the
-memory-to-memory edge graph (gone — entities are what relate two facts now).
-`DELETE /api/memory/{id}` is a hard delete there, not a retraction. Because
-the app can no longer drive the older API, `download_memory_binary.sh` refuses
-a build that still serves `/api/stats`, not just one that predates a feature.
-
-v0.4.1 fixes `GET /api/sessions`, which 500'd on v0.4.0 because the sessions
-controller passes `usize::MAX` as its limit and the adapter bound it as text.
-The Store panel counts sessions through that endpoint, so on v0.4.0 the count
-read 0 while the other two were correct.
-
-v0.4.0 also cannot open a v0.3.x `memory.duckdb` — it exits at startup asking
-for the store to be deleted and the sessions re-imported. Upgrading an
-existing install means moving that file aside; there is no in-place migration.
+`DELETE /api/llm/endpoints/{name}`, which the LLM pane's remove button needs),
+and its download script fails closed if a pin points at an asset that predates
+the feature the app drives it with.
 
 The download scripts are deliberately paranoid — they refuse non-macOS assets,
 abort on a missing checksum manifest, and probe the binary for the subcommand
@@ -141,8 +109,8 @@ at release time and a post-release merge ships in the *next* tag.
   "conformance cannot be used in nonisolated context" warnings (errors in Swift 6)
   the moment `JSONDecoder` touches them off the main actor. Mark pure DTOs
   `nonisolated struct`. The build is warning-clean; keep it that way.
-- **Managers own state, views render it.** Browse trees, in-flight imports and
-  dream cycles live on `MemoryManager`'s sub-managers, never in `@State`. The
+- **Managers own state, views render it.** Streamed explanations, the
+  Guardrails period and provider state live on managers, never in `@State`. The
   5s status poll re-renders the detail column, and view-owned load state gets
   wiped by it — that was a real bug in the app this one descends from.
 - **Re-entrancy guards are set synchronously.** Every `startBundled()` sets
@@ -154,11 +122,10 @@ at release time and a post-release merge ships in the *next* tag.
 - **Sidebar/settings row ids must be unique across the whole `List`.** SwiftUI
   keys rows by `ForEach` id, not by section, so two rows sharing an id become
   ONE row — both highlight together and each shows the other's detail. This bit
-  twice: `MemoryPane`/`CodePane` both had a `.llm` case whose `id` was the raw
-  value, and the sidebar keys proxied servers, memory namespaces and code
-  namespaces all by bare name (a repo and a memory namespace can both be
-  "platform"). Prefix ids with the owning section — `SidebarRow` in RootView and
-  the namespaced `id` on the two pane enums.
+  twice: two settings pane enums both had a `.llm` case whose `id` was the raw
+  value, and the sidebar keys proxied servers and code namespaces by bare name
+  (a server and a namespace can both be "platform"). Prefix ids with the owning
+  section — `SidebarRow` in RootView and the namespaced `id` on the pane enums.
 - **Startup failures get a reason.** Each manager tails its service's log and
   maps the two common ones (DuckDB lock conflict, port in use) to actionable
   text. "It stopped itself" with no explanation is not acceptable UI.
@@ -224,15 +191,13 @@ Days are **UTC**, because that is what the proxy stamps rows in. The graph does
 not relabel them locally: shifting the label without shifting the buckets would
 misattribute traffic near midnight.
 
-## The managed `memory` and `codesearch` proxy entries
+## The managed `codesearch` proxy entry
 
-When Memory (or Code Intelligence) is enabled and its "Serve through the MCP
-proxy" toggle is on, Hoplon writes a `memory` / `codesearch` server into the
-proxy's `servers.json` pointing at that service's MCP endpoint
-(`http://127.0.0.1:<memoryPort>/mcp`,
-`http://127.0.0.1:<codesearchMcpPort>/mcp`), so agents reach both services'
-tools through the one proxy endpoint. Both toggles default ON and both live in
-the service's Settings ▸ Process pane under "Agent access".
+When Code Intelligence is enabled and its "Serve through the MCP proxy" toggle
+is on, Hoplon writes a `codesearch` server into the proxy's `servers.json`
+pointing at its MCP endpoint (`http://127.0.0.1:<codesearchMcpPort>/mcp`), so
+agents reach its tools through the one proxy endpoint. The toggle defaults ON
+and lives in Settings ▸ Code Intelligence ▸ Process under "Agent access".
 
 `servers.json` is a file the user also owns, so `ProxyRegistration` only ever
 touches the entry it created — tagged `[managed by Hoplon]` in its description.
@@ -240,17 +205,26 @@ A hand-written server of the same name is left alone (the UI says so, rather
 than letting the toggle look broken), and turning the toggle off removes only
 what Hoplon added.
 
-`ProxyRegistration` is one instance per service (`.memory`, `.codesearch`), and
-`AppState.syncMemoryProxyRegistration()` / `syncCodesearchProxyRegistration()`
-reconcile them. Each is called from its toggle, the service's start/stop, a port
-change (the endpoint embeds the port, so it goes stale otherwise) and once
-during init — property observers don't fire there, so a managed entry left over
-from a previous run would linger pointing at a dead port.
+`ProxyRegistration` is one instance per service (`.codesearch`), and
+`AppState.syncCodesearchProxyRegistration()` reconciles it. It is called from
+the toggle, the service's start/stop, a port change (the endpoint embeds the
+port, so it goes stale otherwise) and once during init — property observers
+don't fire there, so a managed entry left over from a previous run would linger
+pointing at a dead port.
+
+Earlier versions also managed a `memory` entry for memory-rs, which the app no
+longer ships. `ProxyRegistration.retiredMemory` exists only so init can remove
+a leftover managed `memory` entry; it is never registered, and a hand-written
+`memory` server is left alone like any other. Init likewise clears the other
+memory-rs leftovers Hoplon created — `CliLinkManager.removeRetiredLinks()` drops
+a `~/.local/bin/memory-rs` symlink into an app bundle, and
+`SkillInstallManager.removeRetiredSkills()` drops `memory-rs-mcp`/`-cli` skills
+carrying our marker — under the same only-touch-what-we-made rule.
 
 ## Agent skills are vendored, not written here
 
-Settings ▸ CLI & Skills installs the skills that document memory-rs and
-codesearch into `~/.agents/skills`. Same rule as everything else in this repo:
+Settings ▸ CLI & Skills installs the skills that document codesearch into
+`~/.agents/skills`. Same rule as everything else in this repo:
 the content is upstream's, the app only ships and places it.
 
 `scripts/lib/fetch_skills.sh` vendors `.claude/skills/<name>/SKILL.md` out of
@@ -278,7 +252,7 @@ binary pin; the skill and the binary it documents must come from one release.
 
 **Files are flat in Resources/.** `skill-codesearch-mcp.md`, not
 `Skills/codesearch-mcp/SKILL.md`: the synchronized root group adds every file
-under `Resources/` to Copy Bundle Resources individually, so four files all named
+under `Resources/` to Copy Bundle Resources individually, so files all named
 `SKILL.md` would collide in `Contents/Resources`. A CI step asserts the flat names
 are in the built `.app` — the app installs from them, so a silent drop would ship
 a Skills section with nothing to install.
@@ -288,8 +262,8 @@ a Skills section with nothing to install.
 installed at once gives the agent two overlapping playbooks for one service, and
 it will reach for `codesearch index` in a session where only the MCP tools are
 connected. So the picker is three-way (None / MCP / CLI) and selecting one variant
-removes the other. The choice is per-service: memory over MCP while codesearch
-runs from the CLI is a legitimate setup.
+removes the other. The choice is per-service, should another service's skills
+be bundled again.
 
 **Only ever touch what we installed.** Every install drops a `.hoplon-skill.json`
 marker in the skill directory — the same convention as `[managed by Hoplon]` in
@@ -306,49 +280,16 @@ it is a repo-relative path that can't resolve from `~/.agents/skills` anyway. Th
 `SKILL.md` itself is installed verbatim — what is installed is exactly what the
 release shipped.
 
-## Endpoints added to memory-rs for this app
+## Code namespaces
 
-The memory subsystem was extracted from codesearch with its CLI and TUI
-surfaces, but not the serve-mode HTTP adapter codesearch had. The domain
-capability was all present — the TUI drives it in-process — so what this app
-needed was the missing HTTP layer. Added upstream in memory-rs:
+codesearch namespaces group *indexed repositories*. `NavigationModel` holds the
+one drilled into as `selectedCodeNamespace`.
 
-| Route | Backs |
-|---|---|
-| `GET /api/sessions/discover` | the Sessions list (Claude/OpenCode/Zed, newest first) |
-| `GET /api/sessions/transcript?source=&id=` | the transcript preview pane |
-| `POST /api/sessions/import` | queue a background import (202) |
-| `GET /api/sessions/import` | per-session status map for the row markers |
-| `GET /api/dream` | the Dream settings pane's status |
-| `PUT /api/dream/config` | live+persisted partial settings update |
-| `POST /api/dream` | "Dream now" — background trigger, 202 |
-| `GET`/`PUT`/`DELETE /api/llm/endpoints[/{name}]` | the Memory ▸ LLM pane |
-| `POST /api/llm/active` | bind an endpoint to a role |
-| `GET /api/llm/models` | model discovery for the picker |
-
-Discovery is at `/api/sessions/discover`, not `/api/sessions`, because
-memory-rs already serves *imported* sessions there — a different set (store
-records vs on-disk transcripts).
-
-`POST /api/dream` **changed meaning**: it used to run a cycle synchronously and
-return the report; it now starts one in the background and returns 202. A full
-consolidation is many minutes of LLM calls — far too long to hold an HTTP
-connection. The synchronous path is still the CLI's `memory-rs dream`.
-
-## The two namespace concepts
-
-Memory and Code Intelligence both have "namespaces" and they are **unrelated
-sets**: memory-rs namespaces group *projects* so recall spans a multi-repo
-effort; codesearch namespaces group *indexed repositories*. `NavigationModel`
-keeps them in separate fields (`selectedMemoryNamespace` /
-`selectedCodeNamespace`) so drilling into one never cross-selects the other.
-
-Both are now created **empty** and filled afterward, which is the same shape in
-each section: name it, then add projects/repositories from its detail page. For
-Code Intelligence that meant a codesearch API addition — the app used to derive
-the namespace list by grouping `/api/repositories` by namespace, which cannot
-represent a namespace with nothing in it, so creating one had to be a side
-effect of indexing a folder. Three codesearch endpoints back the current UI:
+They are created **empty** and filled afterward: name it, then index projects
+into it from its detail page. That meant a codesearch API addition — the app
+used to derive the namespace list by grouping `/api/repositories` by namespace,
+which cannot represent a namespace with nothing in it, so creating one had to be
+a side effect of indexing a folder. Three codesearch endpoints back the current UI:
 
 | Route | Backs |
 |---|---|
@@ -368,14 +309,10 @@ also has no graph to draw, so `CodeDetailView` routes a sidebar selection for on
 to the overview's namespace page (which carries "Index Project") instead of
 `NamespaceGraphView`.
 
-**The two sections deliberately share one shape**, so neither teaches a flow the
-other breaks: a `New Namespace` sheet (same title, same `Create` button), a grid
-of clickable squares, and a detail page whose header is back-chevron → name →
-primary action → trash. Only the confirmation text differs, because the two
-deletes are not the same operation — a memory namespace groups projects, so
-removing it destroys nothing, while a code namespace owns its index. The same
-trash icon meaning "you lose a grouping" in one section and "you lose hours of
-indexing" in the other would be a trap.
+The flow is a `New Namespace` sheet, a grid of clickable squares, and a detail
+page whose header is back-chevron → name → primary action → trash. The trash
+confirmation says plainly that the namespace owns its index — deleting it loses
+hours of indexing, not just a grouping.
 
 ## Errors are summarised, not dumped
 
@@ -396,48 +333,29 @@ the model id) rather than letting it inherit the active one.
 Naming is one LLM call per community — dozens on a real repository — so it wants
 the fastest model available. Left to inherit, it lands on the same large model as
 everything else, and on a shared local server it also queues behind whatever else
-is using it (memory-rs's dream cycle, for one). The size parse is a heuristic: an
+is using it. The size parse is a heuristic: an
 id with no parseable size is skipped, and the binding is left alone if none can
 be read.
 
-## LLM configuration is per-service, on purpose
+## LLM configuration lives in codesearch
 
-Each service owns its own endpoints, in its own `config.json`, driven by its own
-`/api/llm/*` — codesearch's was already there, memory-rs's was added for this.
-Hoplon does **not** inject a shared `OPENAI_*` environment.
-
-That's deliberate: memory and code intelligence often want different backends (a
-small local model doing memory extraction, a hosted one answering code
-questions), and env vars can't express that. They'd also lose silently — both
-services resolve `config.json` named endpoint → `OPENAI_*` env → built-in
-default, so any env the app injected would be ignored the moment a named
-endpoint existed.
-
+codesearch owns its own endpoints, in its own `config.json`, driven by its own
+`/api/llm/*`. Hoplon does **not** inject an `OPENAI_*` environment: codesearch
+resolves `config.json` named endpoint → `OPENAI_*` env → built-in default, so
+any env the app injected would be ignored the moment a named endpoint existed.
 The `OPENAI_*` variables remain the fallback when nothing is registered.
 
-Two wrinkles worth knowing:
-
-- **memory-rs resolves chat and embeddings independently.** `active` is the
-  shared default; `active_chat` / `active_embedding` override per role. That's
-  what lets a remote chat model pair with local embeddings. codesearch has no
-  such split.
-- **The embedding dimension is pinned to memory's database on first open.**
-  Switching to an embedding model of a different width is rejected at the next
-  open, so `GET /api/llm/endpoints` reports the pinned model and the LLM pane
-  warns before the store is stranded.
-
-### Both LLM panes have the same shape
+### The LLM pane's shape
 
 `/api/llm/usages` is the whole screen: a row per job, each bound to an explicit
 (provider, model) pair, over a list of the registered servers.
 
 - **Nothing is "the active endpoint" in the UI.** The servers still carry an
-  `active` (and memory's `active_chat` / `active_embedding`), and that is what
-  an unbound job resolves through — but a screen that shows it invites the user
-  to set the default *and* the per-job override for the same decision. So the
-  list below is inventory: no badge, no radio, no activate button. The only
-  place the app writes `active` is silently, on the first endpoint registered,
-  so inheritance has somewhere to land.
+  `active`, and that is what an unbound job resolves through — but a screen
+  that shows it invites the user to set the default *and* the per-job override
+  for the same decision. So the list below is inventory: no badge, no radio, no
+  activate button. The only place the app writes `active` is silently, on the
+  first endpoint registered, so inheritance has somewhere to land.
 - **A job's picker always names a model, inherited or not.** The server reports
   what an inherited usage resolves to; the picker selects that, rather than an
   "Inherit" row with the resolved pair spelled out beside it in prose.

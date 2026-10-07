@@ -149,8 +149,8 @@ struct ServiceHeader<Controls: View>: View {
 
 // MARK: - Search bar
 
-/// The one search field used across the code brick (code search, memory search,
-/// call-graph symbol lookup). Prominent and identical everywhere: a large
+/// The one search field used across the code brick (code search, call-graph
+/// symbol lookup). Prominent and identical everywhere: a large
 /// rounded field with a leading magnifier, a clear button, and an optional
 /// trailing accessory (e.g. a Kind picker). Submitting calls `onSubmit`.
 struct SearchBar<Accessory: View>: View {

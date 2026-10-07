@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Installs the agent skills that document memory-rs and codesearch into
+/// Installs the agent skills that document codesearch into
 /// `~/.agents/skills`, from copies vendored into the app bundle at build time.
 ///
 /// Why the app ships them: a skill is the *documentation half* of a service Hoplon
@@ -62,9 +62,6 @@ final class SkillInstallManager {
     }
 
     static let families: [Family] = [
-        Family(section: .memory,
-               names: [.mcp: "memory-rs-mcp", .cli: "memory-rs-cli"],
-               cliCommand: "memory-rs"),
         Family(section: .code,
                names: [.mcp: "codesearch-mcp", .cli: "codesearch-cli"],
                cliCommand: "codesearch"),
@@ -280,6 +277,25 @@ final class SkillInstallManager {
         }
         refresh()
         return ok
+    }
+
+    /// Skills earlier versions installed for services the app no longer ships.
+    private static let retiredSkillNames = ["memory-rs-mcp", "memory-rs-cli"]
+
+    /// Remove retired skills we installed, once at launch, so agents stop
+    /// reading a playbook for a service that is no longer running. Same
+    /// ownership rule as everywhere else: only a directory carrying our marker
+    /// is touched, and only the files we wrote. Not surfaced as an error — a
+    /// directory kept because the user added files to it is their call.
+    func removeRetiredSkills() {
+        let saved = lastError
+        for name in Self.retiredSkillNames {
+            if case .managed = computeState(name: name) {
+                removeSkill(named: name)
+                print("🧹 Removed retired \(name) skill")
+            }
+        }
+        lastError = saved
     }
 
     /// Delete the two files we wrote, then the directory if that left it empty.

@@ -118,8 +118,7 @@ struct LlmProviderRow<Actions: View>: View {
 }
 
 /// The Copilot row while it is not usable yet: a sign-in button, then the
-/// device code inline once the flow is pending. Both LLM panes drive the same
-/// server-side device flow, so the row is written once.
+/// device code inline once the flow is pending.
 struct CopilotSignInRow: View {
     let login: CopilotLoginStatus?
     var isStarting: Bool = false

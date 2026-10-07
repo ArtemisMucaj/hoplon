@@ -4,8 +4,8 @@ set -euo pipefail
 # Downloads the prebuilt `codesearch` binary into Hoplon/Resources/.
 # build_codesearch_binary.sh is the fallback if the download fails.
 #
-# v2.0.0+ is the post-extraction build (memory moved to memory-rs); the probes
-# below fail closed if a pin points back at an older asset. Pinned to v2.5.0,
+# v2.0.0+ is the post-extraction build (long-term memory split out of it); the
+# probes below fail closed if a pin points back at an older asset. Pinned to v2.5.0,
 # the first release serving DELETE /api/llm/endpoints/{name} — what lets the
 # LLM pane remove a configured endpoint instead of only adding and editing.
 #
@@ -28,7 +28,7 @@ if ! "$OUT" serve --help >/dev/null 2>&1; then
 fi
 
 # Fail closed if the asset predates the memory extraction — a `memory` command
-# would serve /api/memory and fight memory-rs.
+# means a pre-v2 build, whose API the app no longer drives.
 if "$OUT" --help 2>&1 | grep -qiE '^\s+memory\b'; then
   echo "ERROR: this release still has a 'memory' command (pre-extraction)."
   echo "       Pin CODESEARCH_VERSION to v2.0.1 or later."

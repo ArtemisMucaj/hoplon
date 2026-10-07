@@ -1,7 +1,7 @@
 import Foundation
 
 /// Installs command-line symlinks for the bundled CLI tools into a user-owned
-/// bin directory, so `codesearch` / `memory-rs` are runnable from a terminal.
+/// bin directory, so `codesearch` is runnable from a terminal.
 ///
 /// Why `~/.local/bin` and not `/usr/local/bin`: `/usr/local/bin` is `root:wheel`,
 /// so writing there needs `sudo` or a privileged helper — a big notarization and
@@ -26,7 +26,6 @@ final class CliLinkManager {
 
     static let tools: [Tool] = [
         Tool(binaryName: "codesearch", commandName: "codesearch"),
-        Tool(binaryName: "memory-rs", commandName: "memory-rs"),
     ]
 
     enum LinkState: Equatable {
@@ -188,6 +187,28 @@ final class CliLinkManager {
         }
         refresh()
         return true
+    }
+
+    /// Commands earlier versions linked for tools the app no longer bundles.
+    private static let retiredCommands = ["memory-rs"]
+
+    /// Remove links to retired tools, once at launch. They point into the app
+    /// bundle, which no longer carries the binary, so they only dangle. A link is
+    /// removed only if it is a symlink into an app bundle's `Contents/Resources/`
+    /// named for that tool — the shape `install` creates. Anything else at the
+    /// path (the user's own build, a real file) is left alone.
+    func removeRetiredLinks() {
+        let fm = FileManager.default
+        for command in Self.retiredCommands {
+            let link = binDirectory.appendingPathComponent(command)
+            guard let attrs = try? fm.attributesOfItem(atPath: link.path),
+                  (attrs[.type] as? FileAttributeType) == .typeSymbolicLink,
+                  let dest = try? fm.destinationOfSymbolicLink(atPath: link.path),
+                  dest.hasSuffix(".app/Contents/Resources/\(command)")
+            else { continue }
+            try? fm.removeItem(at: link)
+            print("🧹 Removed retired \(command) link at \(link.path)")
+        }
     }
 
     // MARK: - PATH
