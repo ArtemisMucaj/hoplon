@@ -63,6 +63,7 @@ indirect enum JSONValue: Codable, Equatable {
         if case .object(let o) = self { return o[key] }
         return nil
     }
+}
 
 // MARK: - LLM usages
 
