@@ -40,12 +40,11 @@ if ! "$SRC" serve --help >/dev/null 2>&1; then
   exit 1
 fi
 
-# The app expects the post-extraction build: memory lives in memory-rs now, so a
-# binary that still serves /api/memory would double up with the Memory section.
+# The app expects the post-extraction (v2+) build; a binary that still has a
+# `memory` command predates it.
 if "$SRC" --help 2>&1 | grep -qiE '^\s+memory\b'; then
   echo "WARNING: this codesearch build still has a 'memory' command — it predates"
-  echo "         the extraction into memory-rs. Hoplon drives memory through"
-  echo "         memory-rs; the two will fight over the same data."
+  echo "         v2.0.0, whose API Hoplon drives. Update the checkout."
 fi
 
 install -m 0755 "$SRC" "$OUT_DIR/codesearch"

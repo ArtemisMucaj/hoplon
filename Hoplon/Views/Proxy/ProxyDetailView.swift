@@ -140,7 +140,7 @@ struct ProxyDetailView: View {
     var body: some View {
         @Bindable var nav = nav
         VStack(spacing: 0) {
-            // Shared running header — identical to Guardrails & Memory.
+            // Shared running header — identical to the other services.
             ServiceHeader(
                 systemImage: AppSection.proxy.systemImage,
                 status: state.proxyStatus,

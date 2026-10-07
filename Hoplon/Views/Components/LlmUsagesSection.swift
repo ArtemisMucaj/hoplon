@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// The "what answers each job" section, shared by both LLM settings panes.
+/// The "what answers each job" section of the Code Intelligence LLM pane.
 ///
-/// Both services expose the same `/api/llm/usages` shape, so the section is
-/// written once and driven by closures: the owning pane supplies the usages,
-/// the selectable (provider, model) pairs, and how to persist a choice.
+/// Driven by closures over codesearch's `/api/llm/usages` shape: the owning
+/// pane supplies the usages, the selectable (provider, model) pairs, and how to
+/// persist a choice.
 ///
-/// This is deliberately the *first* thing on those screens. The server list
+/// This is deliberately the *first* thing on that screen. The server list
 /// below answers "which backends do I have"; this answers "which one actually
-/// runs my extraction" — the question a user is usually there to settle.
+/// runs this job" — the question a user is usually there to settle.
 ///
 /// Every row names a concrete provider and model, including the ones the server
 /// still resolves by inheritance: the dropdown already shows what will run, so

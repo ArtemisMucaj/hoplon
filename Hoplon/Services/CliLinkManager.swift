@@ -1,7 +1,7 @@
 import Foundation
 
 /// Installs command-line symlinks for the bundled CLI tools into a user-owned
-/// bin directory, so `codesearch` / `memory-rs` are runnable from a terminal.
+/// bin directory, so `codesearch` is runnable from a terminal.
 ///
 /// Why `~/.local/bin` and not `/usr/local/bin`: `/usr/local/bin` is `root:wheel`,
 /// so writing there needs `sudo` or a privileged helper — a big notarization and
@@ -26,7 +26,6 @@ final class CliLinkManager {
 
     static let tools: [Tool] = [
         Tool(binaryName: "codesearch", commandName: "codesearch"),
-        Tool(binaryName: "memory-rs", commandName: "memory-rs"),
     ]
 
     enum LinkState: Equatable {

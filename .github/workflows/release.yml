@@ -80,10 +80,10 @@ jobs:
 
       # Sign every nested executable first, then the app itself. Apple checks
       # nested code during notarization, and --deep is deprecated/unreliable, so
-      # sign each of the four bundled service binaries explicitly.
+      # sign each of the three bundled service binaries explicitly.
       - name: Sign bundled binaries and app
         run: |
-          for bin in panoply guardrail memory-rs codesearch; do
+          for bin in panoply guardrail codesearch; do
             # Two binaries dlopen() code signed under a different Team ID, which
             # the hardened runtime rejects ("different Team IDs") unless
             # disable-library-validation is granted:
@@ -91,8 +91,7 @@ jobs:
             #                an embedded Python.framework at launch.
             #   codesearch - installs and LOADs DuckDB extensions (vss, fts) that
             #                DuckDB downloads ad-hoc signed into ~/.duckdb.
-            # guardrail and memory-rs load no third-party dylibs (memory-rs links
-            # DuckDB but never INSTALLs an extension), so they need no entitlements.
+            # guardrail loads no third-party dylibs, so it needs no entitlements.
             entitlements=()
             case "$bin" in
               panoply)    entitlements=(--entitlements Hoplon/Panoply.entitlements) ;;

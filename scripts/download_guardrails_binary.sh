@@ -41,8 +41,7 @@ set -euo pipefail
 # re-ask every provider what it serves. Before it, a model loaded into a backend
 # after the proxy started was listed by /v1/models and refused by routing until
 # a restart, and a provider added through the pane never reported any models at
-# all — nothing asked it. There is no probe here, unlike codesearch and
-# memory-rs: the pane treats the route's 404 as "this proxy does not have that"
+# all — nothing asked it. There is no probe here, unlike codesearch: the pane treats the route's 404 as "this proxy does not have that"
 # and hides the control, so an older pin degrades to the previous behaviour
 # rather than breaking.
 #

@@ -22,7 +22,7 @@ private struct WindowMinSizeEnforcer: NSViewRepresentable {
 }
 
 /// Top-level window: a TWO-column split — an always-on nav sidebar picks the
-/// section (or a nested proxy server / memory sub-tab), and the detail column
+/// section (or a nested proxy server / code namespace), and the detail column
 /// fills the rest. The sidebar is pinned open (never collapsible) and Proxy is
 /// the landing section.
 struct RootView: View {
@@ -69,9 +69,9 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView().environment(state)
         }
-        // The floor is the fixed sidebar (240) plus the widest detail content:
-        // the memory browser's two-pane split atop the service header's
-        // Refresh/Stop buttons. Below this the toolbar overflows the pane.
+        // The floor is the fixed sidebar (240) plus the widest detail content
+        // atop the service header's Refresh/Stop buttons. Below this the
+        // toolbar overflows the pane.
         .frame(minWidth: 1120, minHeight: 600)
         // SwiftUI's `.windowResizability(.contentMinSize)` lets NavigationSplitView
         // report a smaller minimum than the frame above, so the window still drags
@@ -88,8 +88,6 @@ struct RootView: View {
             ProxyDetailView()
         case .guardrails:
             GuardrailsView()
-        case .memory:
-            MemoryDetailView()
         case .code:
             CodeDetailView()
         case nil:
@@ -103,9 +101,8 @@ struct RootView: View {
 /// A sidebar row identity that stays unique across sections.
 ///
 /// Every nested row in the sidebar's single `List` is keyed by a bare name — a
-/// proxied server, a memory namespace, an indexed code namespace — and those
-/// name-spaces overlap: a repository and a memory namespace can both be called
-/// "netatmo". Two rows sharing an id makes SwiftUI treat them as one: both
+/// proxied server or an indexed code namespace — and those name-spaces can
+/// overlap: a proxied server and a code namespace can both be called "platform". Two rows sharing an id makes SwiftUI treat them as one: both
 /// highlight together and each shows the other's detail. Prefixing with the
 /// owning section keeps them distinct.
 private struct SidebarRow<Value>: Identifiable {
@@ -115,15 +112,13 @@ private struct SidebarRow<Value>: Identifiable {
 
 /// The always-on navigation rail. Services are top-level rows; under Proxy each
 /// MCP server the running proxy is serving appears as a nested row, and under
-/// Memory each namespace plus the Browse/Import screens. Nested rows are only
+/// Code Intelligence each indexed namespace. Nested rows are only
 /// present while the owning service is running — they mirror what's actually up.
 struct SidebarView: View {
     @Environment(AppState.self) var state
     @Binding var selection: SidebarItem?
 
     private var proxiedServers: [String] { state.proxiedServerNames }
-    private var memoryRunning: Bool { state.memoryManager.isRunning }
-    private var namespaces: [MemoryNamespace] { state.memoryManager.namespaces }
     private var codeRunning: Bool { state.codesearchManager.isRunning }
 
     /// Indexed namespaces, sorted — mirrors the landing grid's grouping so the
@@ -146,17 +141,6 @@ struct SidebarView: View {
                 }
 
                 sectionRow(.guardrails)
-
-                // Memory, with its namespaces and browsers nested while running.
-                sectionRow(.memory)
-                if memoryRunning {
-                    ForEach(namespaces.map { SidebarRow(id: "memoryNs.\($0.name)", value: $0) }) { row in
-                        namespaceRow(row.value)
-                    }
-                    ForEach(keyed(MemoryTab.browsable.map(\.rawValue), "memoryTab")) { row in
-                        if let tab = MemoryTab(rawValue: row.value) { memoryTabRow(tab) }
-                    }
-                }
 
                 // Code Intelligence, with its indexed namespaces nested beneath
                 // it while it's running.
@@ -259,45 +243,5 @@ struct SidebarView: View {
             return "\(name) · not connected (discovery pending or backend unreachable)"
         }
         return "\(name) · no tools"
-    }
-
-    /// One nested namespace row under Memory — opens that namespace's projects.
-    @ViewBuilder
-    private func namespaceRow(_ ns: MemoryNamespace) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "square.stack.3d.up.fill")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
-            Text(ns.name)
-                .lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 8)
-            if ns.projectCount > 0 {
-                Text("\(ns.projectCount)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.leading, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .tag(SidebarItem.memoryNamespace(ns.name))
-        .help("\(ns.name) · \(ns.projectCount) project\(ns.projectCount == 1 ? "" : "s")")
-    }
-
-    /// One nested Memory sub-tab (Browse / Import).
-    @ViewBuilder
-    private func memoryTabRow(_ tab: MemoryTab) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: tab.icon)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
-            Text(tab.title)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-        }
-        .padding(.leading, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .tag(SidebarItem.memoryTab(tab))
     }
 }

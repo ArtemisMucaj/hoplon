@@ -11,9 +11,9 @@ import Foundation
 /// defined it) is left exactly as it is, and turning the toggle off removes only
 /// what we added.
 ///
-/// One instance per service — `.memory` and `.codesearch`. The two are
-/// independent entries with independent toggles; a service is only ever
-/// reconciled through its own instance.
+/// One instance per service — `.codesearch` today. Each is an independent
+/// entry with its own toggle; a service is only ever reconciled through its
+/// own instance.
 struct ProxyRegistration {
     /// Entry name written into `mcpServers`.
     let serverName: String
@@ -30,7 +30,10 @@ struct ProxyRegistration {
 
     private var managedDescription: String { "\(purpose) \(Self.managedMarker)" }
 
-    static let memory = ProxyRegistration(
+    /// The `memory` entry earlier versions wrote for memory-rs, which the app
+    /// no longer ships. Kept only so launch can remove a leftover managed entry
+    /// — it is never registered.
+    static let retiredMemory = ProxyRegistration(
         serverName: "memory",
         purpose: "Long-term memory: recall past decisions, preferences and session history."
     )

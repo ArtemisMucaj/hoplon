@@ -6,7 +6,7 @@ import Observation
 /// Lives on `CodesearchManager` (not in the SwiftUI view) so an in-flight
 /// explanation keeps streaming after the user leaves the Overview tab — the
 /// consuming task is owned here, and the accumulated text is waiting when the
-/// user comes back. Same reasoning as `SessionImportManager`.
+/// user comes back.
 @Observable
 @MainActor
 final class FeatureExplainManager {

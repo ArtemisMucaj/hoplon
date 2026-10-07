@@ -3,11 +3,9 @@ import Foundation
 // Codable models for the `codesearch serve` management API. Decoding is
 // deliberately lenient — many nested domain shapes are `additionalProperties:
 // true`, so we model the documented top-level fields and fall back to defaults
-// for anything missing, mirroring the pattern in GuardrailsStats.swift.
-//
-// The memory / dream / session-import shapes that used to live here moved to
-// memory-rs; see MemoryModels.swift and SessionModels.swift. The `lenient`
-// decoding helper is declared once in SessionModels.swift.
+// for anything missing, mirroring the pattern in GuardrailsStats.swift. The
+// `lenient` decoding helper is declared once in SharedModels.swift.
+
 // MARK: - Meta
 
 /// `GET /health` → `{ "status": "ok", "version": "1.3.0" }`.

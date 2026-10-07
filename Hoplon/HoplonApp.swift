@@ -11,7 +11,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             state.startProxy()
             state.startGuardrailsIfEnabled()
-            state.startMemoryIfEnabled()
             state.startCodesearchIfEnabled()
         }
     }
@@ -20,7 +19,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             state.stopProxy()
             state.stopGuardrails()
-            state.stopMemory()
             state.stopCodesearch()
         }
     }
@@ -50,23 +48,19 @@ struct HoplonApp: App {
                     .keyboardShortcut("1", modifiers: .command)
                 Button("Guardrails") { nav.sidebarSelection = .section(.guardrails) }
                     .keyboardShortcut("2", modifiers: .command)
-                Button("Memory") { nav.sidebarSelection = .section(.memory) }
-                    .keyboardShortcut("3", modifiers: .command)
                 Button("Code Intelligence") { nav.sidebarSelection = .section(.code) }
-                    .keyboardShortcut("4", modifiers: .command)
+                    .keyboardShortcut("3", modifiers: .command)
             }
             CommandMenu("Services") {
                 Button("Start All Services") {
                     state.startProxy()
                     state.startGuardrails()
-                    state.startMemory()
                     state.startCodesearch()
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 Button("Stop All Services") {
                     state.stopProxy()
                     state.stopGuardrails()
-                    state.stopMemory()
                     state.stopCodesearch()
                 }
                 .keyboardShortcut(".", modifiers: .command)
@@ -79,7 +73,7 @@ struct HoplonApp: App {
                 .environment(state)
         } label: {
             if state.proxyManager.isStarting || state.guardrailsManager.isStarting
-                || state.memoryManager.isStarting || state.codesearchManager.isStarting {
+                || state.codesearchManager.isStarting {
                 HStack(spacing: 4) {
                     ProgressView()
                         .scaleEffect(0.6)
@@ -90,7 +84,6 @@ struct HoplonApp: App {
                 // Dim only when no service is running at all.
                 let anyRunning = state.proxyManager.isRunning
                     || state.guardrailsManager.isRunning
-                    || state.memoryManager.isRunning
                     || state.codesearchManager.isRunning
                 menuBarIcon(dimmed: !anyRunning)
             }

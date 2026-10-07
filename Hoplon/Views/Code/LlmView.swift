@@ -221,7 +221,7 @@ struct LlmView: View {
         }
     }
 
-    /// Remove one endpoint, mirroring the Memory pane. The refreshed list comes
+    /// Remove one endpoint. The refreshed list comes
     /// back from the server, so the active endpoint the server picked after the
     /// removal is whatever renders — the view never guesses it.
     private func remove(_ endpoint: LlmEndpoint) async {

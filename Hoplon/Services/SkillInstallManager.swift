@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Installs the agent skills that document memory-rs and codesearch into
+/// Installs the agent skills that document codesearch into
 /// `~/.agents/skills`, from copies vendored into the app bundle at build time.
 ///
 /// Why the app ships them: a skill is the *documentation half* of a service Hoplon
@@ -62,9 +62,6 @@ final class SkillInstallManager {
     }
 
     static let families: [Family] = [
-        Family(section: .memory,
-               names: [.mcp: "memory-rs-mcp", .cli: "memory-rs-cli"],
-               cliCommand: "memory-rs"),
         Family(section: .code,
                names: [.mcp: "codesearch-mcp", .cli: "codesearch-cli"],
                cliCommand: "codesearch"),

@@ -7,9 +7,6 @@ import AppKit
 /// what's indexed rather than a re-implementation of search: the landing shows
 /// index-wide stats and the indexed namespaces as clickable squares, and a
 /// sidebar namespace row opens that namespace's community graph directly.
-///
-/// Long-term memory used to live under this section; it moved to memory-rs and
-/// has its own top-level section now.
 struct CodeDetailView: View {
     @Environment(AppState.self) var state
     @Environment(NavigationModel.self) var nav
