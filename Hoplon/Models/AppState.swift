@@ -376,6 +376,10 @@ final class AppState {
         // memory-rs, which no longer ships: it is only ever removed now.
         applyProxyRegistration(.retiredMemory, shouldRegister: false, endpoint: "")
         syncCodesearchProxyRegistration()
+        // The same release left a `memory-rs` CLI link and its agent skills
+        // behind; clear the ones Hoplon created.
+        cliLinkManager.removeRetiredLinks()
+        skillManager.removeRetiredSkills()
 
         // Auto-discover tools when the proxy transitions to running.
         proxyManager.onBecameRunning = { [weak self] in

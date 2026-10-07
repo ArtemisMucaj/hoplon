@@ -279,6 +279,25 @@ final class SkillInstallManager {
         return ok
     }
 
+    /// Skills earlier versions installed for services the app no longer ships.
+    private static let retiredSkillNames = ["memory-rs-mcp", "memory-rs-cli"]
+
+    /// Remove retired skills we installed, once at launch, so agents stop
+    /// reading a playbook for a service that is no longer running. Same
+    /// ownership rule as everywhere else: only a directory carrying our marker
+    /// is touched, and only the files we wrote. Not surfaced as an error — a
+    /// directory kept because the user added files to it is their call.
+    func removeRetiredSkills() {
+        let saved = lastError
+        for name in Self.retiredSkillNames {
+            if case .managed = computeState(name: name) {
+                removeSkill(named: name)
+                print("🧹 Removed retired \(name) skill")
+            }
+        }
+        lastError = saved
+    }
+
     /// Delete the two files we wrote, then the directory if that left it empty.
     /// A directory the user has since added files to (their own `references/`,
     /// say) is kept, so removal never takes their work with it.

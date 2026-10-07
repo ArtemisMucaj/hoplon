@@ -215,7 +215,11 @@ pointing at a dead port.
 Earlier versions also managed a `memory` entry for memory-rs, which the app no
 longer ships. `ProxyRegistration.retiredMemory` exists only so init can remove
 a leftover managed `memory` entry; it is never registered, and a hand-written
-`memory` server is left alone like any other.
+`memory` server is left alone like any other. Init likewise clears the other
+memory-rs leftovers Hoplon created — `CliLinkManager.removeRetiredLinks()` drops
+a `~/.local/bin/memory-rs` symlink into an app bundle, and
+`SkillInstallManager.removeRetiredSkills()` drops `memory-rs-mcp`/`-cli` skills
+carrying our marker — under the same only-touch-what-we-made rule.
 
 ## Agent skills are vendored, not written here
 
