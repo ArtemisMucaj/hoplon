@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v1.1.0...hoplon-v2.0.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove memory-rs and the Memory section ([#53](https://github.com/ArtemisMucaj/hoplon/issues/53))
+
+### Features
+
+* remove memory-rs and the Memory section ([#53](https://github.com/ArtemisMucaj/hoplon/issues/53)) ([db302e2](https://github.com/ArtemisMucaj/hoplon/commit/db302e206c5d7426c36096cbf304d61d897410b3))
+
 ## [1.1.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v1.0.0...hoplon-v1.1.0) (2026-08-25)
 
 
