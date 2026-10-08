@@ -40,7 +40,10 @@ struct TokenBars: View {
     /// Tallest bar, so every row's width is comparable.
     private var rowHeight: CGFloat { 34 }
 
-    @State private var hovered: ModelStat?
+    /// Which model is hovered, by `ModelStat.id`. A tracker rather than a
+    /// `@State` value: this view's body must never read it, or every pointer
+    /// move would rebuild the chart — see `HoverTracker`.
+    @State private var hover = HoverTracker()
 
     /// The model whose bar sits under `point`.
     ///
@@ -115,21 +118,16 @@ struct TokenBars: View {
                         .onContinuousHover { phase in
                             switch phase {
                             case .active(let point):
-                                hovered = model(at: point, proxy: proxy, geometry: geo)
+                                hover.set(model(at: point, proxy: proxy, geometry: geo)?.id)
                             case .ended:
-                                hovered = nil
+                                hover.set(nil)
                             }
                         }
                 }
             }
             .frame(height: max(CGFloat(models.count) * rowHeight + 44, 120))
 
-            // Reserves its line whether or not anything is hovered, so the
-            // rows below do not jump as the pointer crosses the chart.
-            Text(hovered.map { Self.summary($0) } ?? " ")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HoverReadout(models: models, hover: hover)
 
             perModelDetail
         }
@@ -163,11 +161,10 @@ struct TokenBars: View {
                     // anywhere along it rather than only on the digits, and
                     // hovering here highlights the matching bar above.
                     .contentShape(Rectangle())
-                    .onHover { hovered = $0 ? model : (hovered?.id == model.id ? nil : hovered) }
-                    .background(
-                        hovered?.id == model.id
-                            ? Color.accentColor.opacity(0.06) : Color.clear
-                    )
+                    .onHover { inside in
+                        if inside { hover.set(model.id) } else { hover.leave(model.id) }
+                    }
+                    .background(RowHighlight(id: model.id, hover: hover))
                     if index != models.count - 1 { Divider() }
                 }
             }
@@ -248,5 +245,34 @@ struct TokenBars: View {
 
     static func percent(_ value: Double) -> String {
         String(format: "%.0f%%", value * 100)
+    }
+}
+
+/// The line under the chart naming the hovered model's exact figures. Its own
+/// view so that a hover re-renders this one `Text`, not the chart above it.
+private struct HoverReadout: View {
+    let models: [ModelStat]
+    let hover: HoverTracker
+
+    var body: some View {
+        // Reserves its line whether or not anything is hovered, so the rows
+        // below do not jump as the pointer crosses the chart.
+        Text(hover.id.flatMap { id in models.first { $0.id == id } }
+                .map { TokenBars.summary($0) } ?? " ")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
+/// A detail row's hover tint. Separate for the same reason as `HoverReadout`:
+/// the row's tooltips format several numbers each, and should not be rebuilt
+/// for a highlight.
+private struct RowHighlight: View {
+    let id: String
+    let hover: HoverTracker
+
+    var body: some View {
+        hover.id == id ? Color.accentColor.opacity(0.06) : Color.clear
     }
 }

@@ -28,7 +28,10 @@ struct ContributionGraph: View {
 
     /// Width the calendar was actually given, measured rather than assumed.
     @State private var available: CGFloat = 0
-    @State private var hovered: DayActivity?
+    /// The hovered day, by date. A tracker rather than a `@State` value: if
+    /// this view's body read it, every cell crossed would rebuild all ~371
+    /// cells — see `HoverTracker`.
+    @State private var hover = HoverTracker()
 
     /// Everything derived from `days`, computed once per change rather than
     /// per access.
@@ -140,7 +143,7 @@ struct ContributionGraph: View {
                 // The hit area covers the cell *and* its share of the gaps
                 // around it, so moving across the grid hands off from one cell
                 // straight to the next. Without it the 3pt gaps are dead space:
-                // the pointer leaves a cell, `hovered` clears, and the readout
+                // the pointer leaves a cell, the hover clears, and the readout
                 // blanks for a frame between every pair of cells.
                 //
                 // Applied after the visual frame, so only hit-testing grows —
@@ -154,11 +157,7 @@ struct ContributionGraph: View {
                 // renders that hovering itself triggers; the readout formats
                 // one string for the cell actually under the pointer.
                 .onHover { inside in
-                    if inside {
-                        if hovered?.date != day.date { hovered = day }
-                    } else if hovered?.date == day.date {
-                        hovered = nil
-                    }
+                    if inside { hover.set(day.date) } else { hover.leave(day.date) }
                 }
         } else {
             // A day before the range starts: holds the column's shape without
@@ -238,21 +237,7 @@ struct ContributionGraph: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            // One `Text` whose content changes, never a branch between two
-            // views. Swapping the readout for a summary made the 3pt gaps
-            // between cells flash: leaving a cell cleared `hovered`, the
-            // summary appeared for one frame, and the next cell replaced it.
-            // Empty when nothing is hovered, so the line holds its height and
-            // the row below never shifts.
-            Text(hovered.map { Self.tooltip($0) }
-                    ?? selectedDay.map { Self.tooltip($0) }
-                    ?? " ")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                // No implicit animation: a crossfade on a label that tracks the
-                // pointer reads as lag, not polish.
-                .animation(nil, value: hovered?.date)
+            DayReadout(weeks: weeks, selected: selected, hover: hover)
             Spacer()
             Text("Less").font(.system(size: 9)).foregroundStyle(.secondary)
             ForEach(0..<5, id: \.self) { level in
@@ -263,12 +248,6 @@ struct ContributionGraph: View {
             Text("More").font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }
-
-    private var selectedDay: DayActivity? {
-        guard let selected else { return nil }
-        return days.first { $0.date == selected }
-    }
-
 
     // MARK: - Shading
 
@@ -391,6 +370,40 @@ struct ContributionGraph: View {
         // The current, partial week.
         if column.contains(where: { $0 != nil }) { columns.append(column) }
         return columns
+    }
+}
+
+/// The line under the calendar: the hovered day's figures, else the selected
+/// day's. Its own view so a hover re-renders this one `Text`, not the grid.
+///
+/// Looks days up in the laid-out weeks rather than the server's `days`, which
+/// omit quiet days — so a zero day reads "No traffic" instead of nothing.
+private struct DayReadout: View {
+    let weeks: [[DayActivity?]]
+    let selected: String?
+    let hover: HoverTracker
+
+    private func day(_ date: String?) -> DayActivity? {
+        guard let date else { return nil }
+        for week in weeks {
+            for case let day? in week where day.date == date { return day }
+        }
+        return nil
+    }
+
+    var body: some View {
+        // One `Text` whose content changes, never a branch between two views.
+        // Swapping the readout for a summary made the 3pt gaps between cells
+        // flash: leaving a cell cleared the hover, the summary appeared for one
+        // frame, and the next cell replaced it. Empty when nothing is hovered,
+        // so the line holds its height and the row below never shifts.
+        Text((day(hover.id) ?? day(selected)).map { ContributionGraph.tooltip($0) } ?? " ")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            // No implicit animation: a crossfade on a label that tracks the
+            // pointer reads as lag, not polish.
+            .animation(nil, value: hover.id)
     }
 }
 
