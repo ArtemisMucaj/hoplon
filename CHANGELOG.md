@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v2.0.0...hoplon-v2.0.1) (2026-10-08)
+
+
+### Performance Improvements
+
+* **guardrails:** keep hover from re-rendering the token chart and calendar ([#55](https://github.com/ArtemisMucaj/hoplon/issues/55)) ([d71b63e](https://github.com/ArtemisMucaj/hoplon/commit/d71b63ea0bafdad340142665a45df8f25c38e2e9))
+
 ## [2.0.0](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v1.1.0...hoplon-v2.0.0) (2026-10-07)
 
 
