@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v2.0.1...hoplon-v2.0.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **deps:** bump bundled panoply to v0.2.1 ([#57](https://github.com/ArtemisMucaj/hoplon/issues/57)) ([a8ff2cc](https://github.com/ArtemisMucaj/hoplon/commit/a8ff2cc8289d2af01eeb95c3df5815a937a44f9b))
+
 ## [2.0.1](https://github.com/ArtemisMucaj/hoplon/compare/hoplon-v2.0.0...hoplon-v2.0.1) (2026-10-08)
 
 
